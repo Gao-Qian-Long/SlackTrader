@@ -2,7 +2,17 @@
 
 一款面向 Windows 的轻量股票行情浮窗。支持 A 股实时价格、分时图、日 K、持仓盈亏和行业板块观察，界面紧凑、透明度与颜色可调，窗口失去焦点后会自动收回。
 
-> 当前版本：**0.1.1**
+> 当前版本：**v0.1**
+
+## 软件界面
+
+### 分时行情
+
+![分时行情窗口](docs/screenshots/intraday-window.jpg)
+
+### 持仓与显示设置
+
+![持仓与显示设置](docs/screenshots/settings-window.jpg)
 
 ## 功能特点
 
@@ -18,7 +28,7 @@
 
 ## 安装
 
-1. 在 GitHub 项目的 **Releases** 页面下载最新的 `蓝牙助手_*_x64-setup.exe`。
+1. 在 GitHub 项目的 **Releases** 页面下载 `SlackTrader-v0.1-Setup-x64.exe`。
 2. 双击安装包完成安装。
 3. 升级时直接覆盖安装，应用会沿用原用户数据。
 
@@ -64,6 +74,12 @@ Windows 用户数据默认存放在：
 - Node.js 20+
 - Rust stable
 - Microsoft Edge WebView2 Runtime
+
+GitHub Release 同时提供：
+
+- `SlackTrader-v0.1-Setup-x64.exe`：Windows 可安装版本。
+- `SlackTrader-v0.1-Portable-x64.exe`：免安装便携版本。
+- `SlackTrader-v0.1-Source.zip`：对应版本源码。
 
 ```powershell
 npm install
@@ -126,4 +142,3 @@ src-tauri/tauri.conf.json    窗口、应用标识与打包配置
 ## 说明
 
 本项目用于行情观察和持仓记录，显示结果不构成投资建议。交易前请以交易所及券商数据为准。
-
