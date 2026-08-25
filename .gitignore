@@ -1,0 +1,11 @@
+node_modules/
+dist/
+src-tauri/target/
+src-tauri/gen/
+*.log
+release/
+artifacts/
+user-data-backup/
+.idea/
+.vscode/
+.DS_Store
