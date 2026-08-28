@@ -6,7 +6,7 @@ export interface Stock {
   previousClose: number;
   seed: number;
   kind?: "stock" | "index" | "sector";
-  /** 行情源使用的代码；例如同花顺 881129 对应东方财富 90.BK0448。 */
+  /** 行情源原生代码；同花顺 881129 使用 bk_881129，升级时迁移旧映射。 */
   dataSymbol?: string;
   quantity?: number;
   costPrice?: number;
@@ -15,7 +15,7 @@ export interface Stock {
 export interface IntradayPoint {
   time: number;
   price: number;
-  average: number;
+  average?: number;
   volume: number;
 }
 

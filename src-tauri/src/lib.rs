@@ -28,7 +28,7 @@ fn http_client() -> &'static reqwest::Client {
     static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
     CLIENT.get_or_init(|| {
         reqwest::Client::builder()
-            .user_agent("Mozilla/5.0 BluetoothAssistant/0.2")
+            .user_agent("Mozilla/5.0 BluetoothAssistant/0.3")
             .timeout(Duration::from_secs(10))
             .redirect(reqwest::redirect::Policy::none())
             .build()
@@ -43,6 +43,7 @@ async fn fetch_market_json(url: String) -> Result<String, String> {
     let host = parsed.host_str().unwrap_or_default().to_owned();
     let referer = if host == "hq.sinajs.cn" { "https://finance.sina.com.cn/" }
         else if host.ends_with("gtimg.cn") { "https://gu.qq.com/" }
+        else if host == "d.10jqka.com.cn" { "https://q.10jqka.com.cn/" }
         else { "https://quote.eastmoney.com/" };
     let response = http_client().get(parsed).header("Referer", referer)
         .send().await.map_err(|e| if e.is_timeout() { "请求超时（10秒）".to_string() }
@@ -73,6 +74,20 @@ fn allowed_market_url(url: &reqwest::Url) -> bool {
         "qt.gtimg.cn" => url.path().strip_prefix("/q=").is_some_and(valid_quote_code),
         "hq.sinajs.cn" => url.path().strip_prefix("/list=").is_some_and(valid_quote_code),
         "web.ifzq.gtimg.cn" => matches!(url.path(), "/appstock/app/minute/query" | "/appstock/app/fqkline/get"),
+        "d.10jqka.com.cn" => allowed_ths_path(url.path()),
+        _ => false,
+    }
+}
+
+fn allowed_ths_path(path: &str) -> bool {
+    let parts: Vec<&str> = path.trim_start_matches('/').split('/').collect();
+    if parts.len() < 4 || !matches!(parts[0], "v6" | "v4") { return false; }
+    let id = parts[2];
+    if id.len() != 9 || !id.starts_with("bk_") || !id.as_bytes()[3..].iter().all(u8::is_ascii_digit) { return false; }
+    match parts[1] {
+        "realhead" => parts[0] == "v6" && parts.len() == 4 && parts[3] == "last.js",
+        "time" => parts.len() == 4 && parts[3] == "last.js",
+        "line" => parts.len() == 5 && parts[3] == "01" && matches!(parts[4], "last.js" | "today.js"),
         _ => false,
     }
 }
@@ -84,6 +99,39 @@ fn valid_quote_code(code: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn ths_allowlist() {
+        for path in ["/v6/realhead/bk_881129/last.js", "/v6/time/bk_881129/last.js", "/v4/time/bk_881129/last.js", "/v6/line/bk_881129/01/last.js", "/v4/line/bk_881129/01/today.js"] {
+            assert!(allowed_market_url(&reqwest::Url::parse(&format!("https://d.10jqka.com.cn{path}")).unwrap()));
+        }
+        for path in ["/v6/time/881129/last.js", "/v6/time/bk_88112x/last.js", "/v6/line/bk_881129/02/last.js", "/v4/realhead/bk_881129/last.js", "/v6/time/bk_881129/last.js/extra", "/v6/time/bk_881129"] {
+            assert!(!allowed_ths_path(path));
+        }
+        assert!(!allowed_market_url(&reqwest::Url::parse("https://d.10jqka.com.cn.evil.test/v6/time/bk_881129/last.js").unwrap()));
+    }
+    #[test]
+    #[ignore = "explicit live sector network verification only"]
+    fn live_sector_endpoints() {
+        tauri::async_runtime::block_on(async {
+            for (label,path) in [
+                ("ths-quote", "v6/realhead/bk_881129/last.js"),
+                ("ths-minute", "v6/time/bk_881129/last.js"),
+                ("ths-minute-v4", "v4/time/bk_881129/last.js"),
+                ("ths-daily", "v6/line/bk_881129/01/last.js"),
+                ("ths-today", "v6/line/bk_881129/01/today.js"),
+                ("ths-daily-v4", "v4/line/bk_881129/01/last.js"),
+                ("ths-today-v4", "v4/line/bk_881129/01/today.js"),
+            ] {
+                let body = fetch_market_json(format!("https://d.10jqka.com.cn/{path}")).await.expect(label);
+                assert!(body.starts_with("quotebridge_") && body.contains("881129"), "{label}: wrong response");
+                if let Ok(dir) = std::env::var("MARKET_LIVE_OUTPUT") {
+                    std::fs::create_dir_all(&dir).unwrap();
+                    std::fs::write(std::path::Path::new(&dir).join(format!("{label}.txt")), &body).unwrap();
+                }
+                println!("LIVE PASS {label}: {} bytes",body.len());
+            }
+        });
+    }
     #[test]
     fn market_allowlist() {
         for url in ["https://qt.gtimg.cn/q=sh603118", "https://hq.sinajs.cn/list=sh603118", "https://web.ifzq.gtimg.cn/appstock/app/minute/query?code=sh603118"] {

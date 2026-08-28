@@ -1,11 +1,11 @@
 import type { DailyCandle, IntradayPoint, MarketStatus, Stock } from "./types";
 
-export type QuoteSource = "tencent" | "sina" | "eastmoney";
-export type SourcePreference = "auto" | QuoteSource;
-export const SOURCE_NAMES: Record<QuoteSource, string> = { tencent: "腾讯", sina: "新浪", eastmoney: "东方财富" };
+export type QuoteSource = "tencent" | "sina" | "eastmoney" | "ths";
+export type SourcePreference = "auto" | Exclude<QuoteSource, "ths">;
+export const SOURCE_NAMES: Record<QuoteSource, string> = { tencent: "腾讯", sina: "新浪", eastmoney: "东方财富", ths: "同花顺" };
 const SH_INDEXES = new Set(["000300", "000016", "000905", "000852", "000688"]);
 export const SECTOR_ALIASES: Record<string, { dataSymbol: string; name: string }> = {
-  "881129": { dataSymbol: "90.BK0448", name: "通信设备" },
+  "881129": { dataSymbol: "bk_881129", name: "通信设备" },
 };
 export function normalizeInstrument(stock: Stock): Stock {
   const sector = SECTOR_ALIASES[stock.symbol];
@@ -13,6 +13,7 @@ export function normalizeInstrument(stock: Stock): Stock {
 }
 export function eastmoneyId(stock: Stock): string {
   const normalized = normalizeInstrument(stock);
+  if (normalized.dataSymbol?.startsWith("bk_")) throw new Error("同花顺板块使用原代码，不映射到东方财富");
   if (normalized.dataSymbol?.includes(".")) return normalized.dataSymbol;
   const symbol = normalized.dataSymbol ?? normalized.symbol;
   return `${/^[65]/.test(symbol) || SH_INDEXES.has(symbol) ? 1 : 0}.${symbol}`;
@@ -42,8 +43,8 @@ export function parseTime(value: string): number {
   if (!Number.isFinite(time)) throw new Error("行情时间格式错误");
   return time;
 }
-export interface WireQuote { name: string; price: number; previousClose: number; timestamp: number; volume: number }
-function checkedQuote(q: WireQuote): WireQuote {
+export interface WireQuote { name: string; price: number; previousClose: number; timestamp: number; volume: number; note?: string }
+export function checkedQuote(q: WireQuote): WireQuote {
   if (!q.name || !Number.isFinite(q.price) || q.price <= 0 || !Number.isFinite(q.previousClose) || q.previousClose <= 0
       || !Number.isFinite(q.timestamp) || q.timestamp < Date.UTC(2000, 0, 1)) throw new Error("报价字段为空或异常");
   return q;

@@ -85,8 +85,8 @@ document.querySelector<HTMLDivElement>("#app")!.innerHTML = `
       <label class="setting-row"><span>透明度</span><input id="opacity" type="range" min="65" max="100" value="${opacity}"><output>${opacity}%</output></label>
       <button class="reset-theme" type="button">恢复低调配色</button>
       <div class="shortcut"><span>显示 / 隐藏</span><kbd>Alt + Shift + S</kbd></div>
-      <label class="source-setting">报价源优先级<select id="quote-source"><option value="auto">自动（腾讯优先）</option><option value="tencent">腾讯优先</option><option value="sina">新浪优先</option><option value="eastmoney">东方财富优先</option></select></label>
-      <div class="data-source">v0.2 · 个股自动主备切换 · 报价5秒 / 分时30秒 · 休市降频<br>板块保留东方财富口径 · 无模拟回退</div>
+      <label class="source-setting">个股报价优先级<select id="quote-source"><option value="auto">自动（腾讯优先）</option><option value="tencent">腾讯优先</option><option value="sina">新浪优先</option><option value="eastmoney">东方财富优先</option></select></label>
+      <div class="data-source">v0.3 · 报价5秒 / 分时30秒 · 休市降频<br>881129 使用同花顺原板块 · 无模拟回退</div>
       <div class="attribution">Charts by <a href="https://www.tradingview.com/" target="_blank">TradingView</a></div>
     </aside>
     <div class="compact-row" data-drag-handle title="滚轮换股 · 双击展开 · 右键设置 · 中键隐藏"><span class="stock-name" data-drag-handle>--</span><svg class="spark" viewBox="0 0 42 18"><path fill="none" stroke-width="1" d=""/></svg><span class="price flat" data-drag-handle>--</span><span class="change flat" data-drag-handle data-role="change-secondary">--%</span><div class="compact-actions"><button class="icon-button compact-button" title="展开">${icons.shrink}</button></div></div>
@@ -165,7 +165,7 @@ function render(update: QuoteUpdate) {
   const marketDate = new Date(snapshot.timestamp + 8 * 3600_000).toISOString().slice(0, 10);
   const oldTrade = snapshot.status === "trading" && Date.now() - snapshot.timestamp > 60_000;
   document.querySelectorAll<HTMLElement>(".stock-name").forEach(el => el.textContent = snapshot.stock.name);
-  const marketLabel = snapshot.stock.kind === "sector" ? "板块" : snapshot.stock.symbol.startsWith("6") ? "SH" : "SZ";
+  const marketLabel = snapshot.stock.kind === "sector" ? `${update.quoteSource ?? ""}板块` : snapshot.stock.symbol.startsWith("6") ? "SH" : "SZ";
   document.querySelector<HTMLElement>(".symbol")!.textContent = `${snapshot.stock.symbol} · ${marketLabel}`;
   document.querySelectorAll<HTMLElement>(".price").forEach(el => { el.textContent = snapshot.price.toFixed(2); el.className = `price ${changeClass}`; });
   const primaryChange = document.querySelector<HTMLElement>('[data-role="change-primary"]')!;
@@ -179,7 +179,7 @@ function render(update: QuoteUpdate) {
   const statusText = document.querySelector<HTMLElement>(".status-text")!;
   statusText.textContent = metrics.hasPosition
     ? `今 ${formatMoney(metrics.today)} · 总 ${formatMoney(metrics.total)} · ${marketTime.slice(0, 5)}`
-    : chartMode === "daily" ? `日K · 前复权 · ${marketTime.slice(0, 5)}` : `${oldTrade ? "末笔" : statusLabels[snapshot.status]} · ${marketTime}`;
+    : chartMode === "daily" ? `日K · ${snapshot.stock.kind === "sector" ? "行业指数" : "前复权"} · ${marketTime.slice(0, 5)}` : `${oldTrade ? "末笔" : statusLabels[snapshot.status]} · ${marketTime}`;
   if (update.quoteError) statusText.textContent = `报价待恢复 · 最后数据 ${marketTime}`;
   else if (chartMode === "intraday" && update.historyMessage) statusText.textContent += " · 分时待更新";
   statusText.title = `报价源：${update.quoteSource ?? "东方财富"} · 行情时间 ${marketDate} ${marketTime} 北京时间 · 分时源：${update.historySource ?? "待连接"}${update.historyMessage ? ` · ${update.historyMessage}` : ""}${update.quoteError ? ` · ${update.quoteError}` : ""}${metrics.hasPosition ? ` · 收益率 ${metrics.returnPercent >= 0 ? "+" : ""}${metrics.returnPercent.toFixed(2)}%` : ""}`;
@@ -245,7 +245,7 @@ function drawIntradayChart() {
   const left = 29, right = width - 38, top = 18, axisBottom = height - 14;
   const priceBottom = axisBottom;
   const priceHeight = Math.max(24, priceBottom - top);
-  const maxDeviation = Math.max(previousClose * .01, ...history.flatMap(point => [Math.abs(point.price - previousClose), Math.abs(point.average - previousClose)])) * 1.12;
+  const maxDeviation = Math.max(previousClose * .01, ...history.flatMap(point => [Math.abs(point.price - previousClose), Math.abs((point.average ?? point.price) - previousClose)])) * 1.12;
   const high = previousClose + maxDeviation;
   const low = previousClose - maxDeviation;
   const plotWidth = right - left;
@@ -290,7 +290,7 @@ function drawIntradayChart() {
     history.forEach((point, index) => { const x = xForTime(point.time), y = yForPrice(selector(point)); index ? context.lineTo(x, y) : context.moveTo(x, y); });
     context.stroke();
   };
-  drawLine(point => point.average, theme.average, 1);
+  if (history.every(point => point.average !== undefined && Number.isFinite(point.average))) drawLine(point => point.average!, theme.average, 1);
   drawLine(point => point.price, theme.line, 1.35);
 }
 
@@ -333,6 +333,9 @@ function selectStock(index: number) {
   localStorage.setItem("stockIndex", String(currentIndex));
   renderWatchlist();
   populatePositionEditor();
+  const sourceSelect = document.querySelector<HTMLSelectElement>("#quote-source")!;
+  sourceSelect.disabled = stocks[currentIndex].kind === "sector";
+  sourceSelect.title = sourceSelect.disabled ? "板块固定使用对应原始数据源，个股优先级不适用" : "选择个股报价优先来源";
   disconnect?.();
   latestUpdate = undefined;
   candleSeries.setData([]);

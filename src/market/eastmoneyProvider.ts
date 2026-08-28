@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { DailyCandle, IntradayPoint, MarketProvider, QuoteUpdate, Stock } from "./types";
+import { isTonghuashun, tonghuashunId, parseTonghuashunQuote, parseTonghuashunMinute, parseTonghuashunDaily, parseTonghuashunToday, mergeTonghuashunDaily } from "./tonghuashun";
 import { chinaDate, eastmoneyId, isSector, mainlandId, marketStatus, normalizeInstrument, parseEastmoneyDaily,
   parseEastmoneyMinute, parseEastmoneyQuote, parseSinaQuote, parseTencentDaily, parseTencentMinute, parseTencentQuote,
   round, SOURCE_NAMES, type QuoteSource, type SourcePreference, type WireQuote } from "./marketData";
@@ -60,7 +61,19 @@ export class EastmoneyMarketProvider implements MarketProvider {
     const order: QuoteSource[] = ["tencent", "sina", "eastmoney"];
     return this.preference === "auto" ? order : [this.preference, ...order.filter(s => s !== this.preference)];
   }
+  private async tonghuashunTime(stock: Stock) {
+    const id = tonghuashunId(stock);
+    return this.choose(["v6", "v4"].map(version => ({ source: "ths" as const, key: `ths:time:${version}`, run: async () =>
+      parseTonghuashunMinute(await this.read(`https://d.10jqka.com.cn/${version}/time/${id}/last.js`, 29_000), id, version) })));
+  }
   private async quote(stock: Stock) {
+    if (isTonghuashun(stock)) {
+      const id = tonghuashunId(stock);
+      return this.choose([
+        { source: "ths", key: "ths:quote", run: async () => parseTonghuashunQuote(await this.read(`https://d.10jqka.com.cn/v6/realhead/${id}/last.js`, 4500), id) },
+        { source: "ths", key: "ths:quote-minute", run: async () => (await this.tonghuashunTime(stock)).value.quote },
+      ]);
+    }
     return this.choose(this.sources(stock).map(source => ({ source, key: `quote:${source}`, run: async () => {
       if (source === "eastmoney") {
         const id = eastmoneyId(stock);
@@ -77,6 +90,10 @@ export class EastmoneyMarketProvider implements MarketProvider {
     return this.preference === "eastmoney" ? ["eastmoney","tencent"] : ["tencent","eastmoney"];
   }
   private async history(stock: Stock) {
+    if (isTonghuashun(stock)) {
+      const result = await this.tonghuashunTime(stock);
+      return { source: result.source, value: result.value.history };
+    }
     return this.choose(this.chartSources(stock).map(source => ({ source, key: `minute:${source}`, run: async () => {
       if (source === "tencent") {
         const id = mainlandId(stock);
@@ -99,8 +116,8 @@ export class EastmoneyMarketProvider implements MarketProvider {
       const change = round(latest.price - latest.previousClose);
       onUpdate({ history: visibleHistory, point: visibleHistory[visibleHistory.length-1] ?? { time: latest.timestamp/1000, price: latest.price, average: latest.price, volume: 0 },
         snapshot: { stock: { ...normalized, name: latest.name, previousClose: latest.previousClose }, price: latest.price, change,
-          changePercent: round(change/latest.previousClose*100), volume: latest.volume, timestamp: latest.timestamp, status: marketStatus(this.deps.now()) },
-        quoteSource: SOURCE_NAMES[quoteSource], quoteError,
+          changePercent: round((latest.price-latest.previousClose)/latest.previousClose*100), volume: latest.volume, timestamp: latest.timestamp, status: marketStatus(this.deps.now()) },
+        quoteSource: `${SOURCE_NAMES[quoteSource]}${latest.note ? `（${latest.note}）` : ""}`, quoteError,
         historySource: historySource ? SOURCE_NAMES[historySource] : undefined,
         historyMessage: history.length && !sameDate ? "分时日期与报价不一致，等待更新" : historyMessage });
     };
@@ -113,7 +130,7 @@ export class EastmoneyMarketProvider implements MarketProvider {
       } catch (error) {
         if (stopped) return;
         quoteFailures++;
-        quoteError = `${isSector(normalized) ? "板块原数据源异常（未替换为其他板块）：" : ""}${errorText(error)}`;
+        quoteError = `${isSector(normalized) ? "板块数据源待恢复，稍后自动重试：" : ""}${errorText(error)}`;
         if (latest) publish();
         onError?.(quoteError);
       } finally {
@@ -144,6 +161,16 @@ export class EastmoneyMarketProvider implements MarketProvider {
     return () => { stopped = true; this.deps.cancel(quoteTimer); this.deps.cancel(historyTimer); };
   }
   async getDailyCandles(stock: Stock): Promise<DailyCandle[]> {
+    if (isTonghuashun(stock)) {
+      const id = tonghuashunId(stock);
+      const [history, today] = await Promise.all([
+        this.choose(["v6", "v4"].map(version => ({ source: "ths" as const, key: `ths:daily:${version}`, run: async () =>
+          parseTonghuashunDaily(await this.read(`https://d.10jqka.com.cn/${version}/line/${id}/01/last.js`, 59_000), id, version) }))),
+        this.choose(["v6", "v4"].map(version => ({ source: "ths" as const, key: `ths:today:${version}`, run: async () =>
+          parseTonghuashunToday(await this.read(`https://d.10jqka.com.cn/${version}/line/${id}/01/today.js`, 59_000), id, version) }))),
+      ]);
+      return mergeTonghuashunDaily(history.value, [today.value]);
+    }
     const result = await this.choose(this.chartSources(stock).map(source => ({ source, key: `daily:${source}`, run: async () => {
       if (source === "tencent") {
         const id = mainlandId(stock);
