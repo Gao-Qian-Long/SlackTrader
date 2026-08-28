@@ -39,6 +39,10 @@ export interface QuoteSnapshot {
 }
 
 export interface QuoteUpdate {
+  quoteSource?: string;
+  quoteError?: string;
+  historySource?: string;
+  historyMessage?: string;
   snapshot: QuoteSnapshot;
   point: IntradayPoint;
   history: IntradayPoint[];

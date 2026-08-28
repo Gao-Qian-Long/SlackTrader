@@ -1,6 +1,6 @@
 [package]
 name = "bluetooth-assistant"
-version = "0.1.0"
+version = "0.2.0"
 description = "A discreet, lightweight intraday market ticker"
 authors = ["Bluetooth Assistant"]
 edition = "2021"
@@ -16,3 +16,5 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-global-shortcut = "2"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+encoding_rs = "0.8"
+httpdate = "1"

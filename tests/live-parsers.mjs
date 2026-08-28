@@ -1,0 +1,21 @@
+// Run npm test first; pass the output directory from the Rust live test.
+import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+import path from 'node:path';
+import * as data from '../artifacts/market-fix/test-built/marketData.mjs';
+const dir = process.argv[2];
+assert.ok(dir, 'Usage: node tests/live-parsers.mjs <MARKET_LIVE_OUTPUT>');
+const read = name => readFile(path.join(dir,name+'.txt'),'utf8');
+const qt=data.parseTencentQuote(await read('tencent-quote'),'sh603118');
+const sina=data.parseSinaQuote(await read('sina-quote'),'sh603118');
+const minute=data.parseTencentMinute(await read('tencent-minute'),'sh603118');
+const daily=data.parseTencentDaily(await read('tencent-daily'),'sh603118');
+assert.equal(qt.name,'共进股份');assert.equal(sina.name,qt.name);
+assert.equal(qt.previousClose,sina.previousClose);
+assert.ok(Math.abs(qt.price-sina.price)/qt.price < .05, 'Quote sources diverge >5%; inspect timestamps');
+assert.ok(minute.length>1 && daily.length>1);
+assert.equal(data.chinaDate(minute.at(-1).time*1000),data.chinaDate(qt.timestamp));
+assert.ok(minute.every(p=>p.average>0 && p.average<qt.price*2));
+for(const [source,q] of [['腾讯',qt],['新浪',sina]]) console.log(`LIVE PARSE ${source} ${q.name} 603118 price=${q.price} previousClose=${q.previousClose} timestamp=${new Date(q.timestamp).toISOString()}`);
+console.log(`LIVE PARSE minute=${minute.length} points last=${minute.at(-1).price} VWAP=${minute.at(-1).average.toFixed(4)} daily=${daily.length} candles`);
+console.log('LIVE_PARSE_RESULT=PASS');

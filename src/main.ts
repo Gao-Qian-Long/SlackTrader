@@ -4,6 +4,7 @@ import { availableMonitors, currentMonitor, getCurrentWindow, LogicalSize, Physi
 import { invoke } from "@tauri-apps/api/core";
 import { register } from "@tauri-apps/plugin-global-shortcut";
 import { EastmoneyMarketProvider, normalizeInstrument, SECTOR_ALIASES } from "./market/eastmoneyProvider";
+import type { SourcePreference } from "./market/marketData";
 import type { QuoteUpdate, Stock } from "./market/types";
 
 const DEFAULT_STOCKS: Stock[] = [
@@ -32,6 +33,8 @@ function loadTheme(): Theme {
 const isTauri = "__TAURI_INTERNALS__" in window;
 const appWindow = getCurrentWindow();
 const provider = new EastmoneyMarketProvider();
+const savedSource = localStorage.getItem("quoteSourcePreference") ?? "auto";
+provider.setPreference((["auto", "tencent", "sina", "eastmoney"].includes(savedSource) ? savedSource : "auto") as SourcePreference);
 let stocks = loadStocks();
 let theme = loadTheme();
 let currentIndex = Math.min(Number(localStorage.getItem("stockIndex") ?? 0), stocks.length - 1);
@@ -82,7 +85,8 @@ document.querySelector<HTMLDivElement>("#app")!.innerHTML = `
       <label class="setting-row"><span>透明度</span><input id="opacity" type="range" min="65" max="100" value="${opacity}"><output>${opacity}%</output></label>
       <button class="reset-theme" type="button">恢复低调配色</button>
       <div class="shortcut"><span>显示 / 隐藏</span><kbd>Alt + Shift + S</kbd></div>
-      <div class="data-source">行情源：东方财富公开接口 · 3秒刷新 · 无模拟回退</div>
+      <label class="source-setting">报价源优先级<select id="quote-source"><option value="auto">自动（腾讯优先）</option><option value="tencent">腾讯优先</option><option value="sina">新浪优先</option><option value="eastmoney">东方财富优先</option></select></label>
+      <div class="data-source">v0.2 · 个股自动主备切换 · 报价5秒 / 分时30秒 · 休市降频<br>板块保留东方财富口径 · 无模拟回退</div>
       <div class="attribution">Charts by <a href="https://www.tradingview.com/" target="_blank">TradingView</a></div>
     </aside>
     <div class="compact-row" data-drag-handle title="滚轮换股 · 双击展开 · 右键设置 · 中键隐藏"><span class="stock-name" data-drag-handle>--</span><svg class="spark" viewBox="0 0 42 18"><path fill="none" stroke-width="1" d=""/></svg><span class="price flat" data-drag-handle>--</span><span class="change flat" data-drag-handle data-role="change-secondary">--%</span><div class="compact-actions"><button class="icon-button compact-button" title="展开">${icons.shrink}</button></div></div>
@@ -157,7 +161,8 @@ function render(update: QuoteUpdate) {
   const { snapshot, history } = update;
   const changeClass = classForChange(snapshot.change);
   const metrics = positionMetrics(update);
-  const marketTime = new Date(snapshot.timestamp).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
+  const marketTime = new Date(snapshot.timestamp).toLocaleTimeString("zh-CN", { timeZone: "Asia/Shanghai", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
+  const marketDate = new Date(snapshot.timestamp + 8 * 3600_000).toISOString().slice(0, 10);
   const oldTrade = snapshot.status === "trading" && Date.now() - snapshot.timestamp > 60_000;
   document.querySelectorAll<HTMLElement>(".stock-name").forEach(el => el.textContent = snapshot.stock.name);
   const marketLabel = snapshot.stock.kind === "sector" ? "板块" : snapshot.stock.symbol.startsWith("6") ? "SH" : "SZ";
@@ -175,9 +180,12 @@ function render(update: QuoteUpdate) {
   statusText.textContent = metrics.hasPosition
     ? `今 ${formatMoney(metrics.today)} · 总 ${formatMoney(metrics.total)} · ${marketTime.slice(0, 5)}`
     : chartMode === "daily" ? `日K · 前复权 · ${marketTime.slice(0, 5)}` : `${oldTrade ? "末笔" : statusLabels[snapshot.status]} · ${marketTime}`;
-  statusText.title = `真实行情 · 最后成交 ${marketTime}${metrics.hasPosition ? ` · 收益率 ${metrics.returnPercent >= 0 ? "+" : ""}${metrics.returnPercent.toFixed(2)}%` : ""}`;
-  document.querySelector(".status-dot")!.classList.toggle("live", chartMode === "intraday" && snapshot.status === "trading");
-  document.querySelector(".status-dot")!.classList.toggle("stale", oldTrade);
+  if (update.quoteError) statusText.textContent = `报价待恢复 · 最后数据 ${marketTime}`;
+  else if (chartMode === "intraday" && update.historyMessage) statusText.textContent += " · 分时待更新";
+  statusText.title = `报价源：${update.quoteSource ?? "东方财富"} · 行情时间 ${marketDate} ${marketTime} 北京时间 · 分时源：${update.historySource ?? "待连接"}${update.historyMessage ? ` · ${update.historyMessage}` : ""}${update.quoteError ? ` · ${update.quoteError}` : ""}${metrics.hasPosition ? ` · 收益率 ${metrics.returnPercent >= 0 ? "+" : ""}${metrics.returnPercent.toFixed(2)}%` : ""}`;
+  document.querySelector(".status-dot")!.classList.toggle("live", chartMode === "intraday" && snapshot.status === "trading" && !update.quoteError);
+  document.querySelector(".status-dot")!.classList.toggle("stale", oldTrade || Boolean(update.quoteError));
+  document.querySelector(".compact-row")!.setAttribute("title", `${snapshot.stock.name} · ${update.quoteSource ?? "东方财富"} · ${marketTime}${update.quoteError ? " · 报价待恢复（保留末笔）" : ""}\n滚轮换股 · 双击展开 · 右键设置`);
   renderSparkline(history.slice(-36).map(point => point.price), changeClass);
   void renderChart();
   if (isTauri) {
@@ -186,7 +194,7 @@ function render(update: QuoteUpdate) {
       ? `今日 ${formatMoney(metrics.today)} | 总计 ${formatMoney(metrics.total)} (${metrics.returnPercent >= 0 ? "+" : ""}${metrics.returnPercent.toFixed(2)}%)`
       : `今日 ${sign}${snapshot.change.toFixed(2)}  ${sign}${snapshot.changePercent.toFixed(2)}%`;
     void invoke("update_tray_tooltip", {
-      text: `${snapshot.stock.name} ${snapshot.stock.symbol}${snapshot.stock.kind === "sector" ? " 板块" : ""}\n${detail}\n现价 ${snapshot.price.toFixed(2)}`,
+      text: `${snapshot.stock.name} ${snapshot.stock.symbol}${snapshot.stock.kind === "sector" ? " 板块" : ""}\n${detail}\n${update.quoteError ? "末笔" : "现价"} ${snapshot.price.toFixed(2)} · ${update.quoteSource} ${marketTime}${update.quoteError ? " · 待恢复" : ""}`,
     });
   }
 }
@@ -199,7 +207,7 @@ async function renderChart() {
     drawIntradayChart();
     return;
   }
-  // 日K无需跟随 3 秒行情刷新，按最小间隔低频拉取
+  // 日K无需跟随报价刷新，按最小间隔低频拉取
   if (Date.now() - lastDailyFetch < DAILY_REFRESH_MS) return;
   lastDailyFetch = Date.now();
   const generation = ++dailyRequestGeneration;
@@ -209,6 +217,7 @@ async function renderChart() {
     candleSeries.setData(candles.map(({ volume: _volume, time, ...candle }) => ({ ...candle, time: toBusinessDay(time) })));
     chart.timeScale().fitContent();
   } catch (error) {
+    if (generation !== dailyRequestGeneration || chartMode !== "daily") return;
     document.querySelector<HTMLElement>(".status-text")!.textContent = error instanceof Error ? error.message : "日K获取失败";
   }
 }
@@ -227,6 +236,11 @@ function drawIntradayChart() {
   context.clearRect(0, 0, width, height);
 
   const history = latestUpdate.history;
+  if (!history.length) {
+    context.font = '10px "Segoe UI", sans-serif'; context.fillStyle = theme.muted; context.textAlign = "center";
+    context.fillText("分时待更新，报价独立刷新", width / 2, height / 2);
+    return;
+  }
   const previousClose = latestUpdate.snapshot.stock.previousClose;
   const left = 29, right = width - 38, top = 18, axisBottom = height - 14;
   const priceBottom = axisBottom;
@@ -236,8 +250,8 @@ function drawIntradayChart() {
   const low = previousClose - maxDeviation;
   const plotWidth = right - left;
   const xForTime = (timestamp: number) => {
-    const date = new Date(timestamp * 1000);
-    const minute = date.getHours() * 60 + date.getMinutes();
+    const date = new Date(timestamp * 1000 + 8 * 3600_000);
+    const minute = date.getUTCHours() * 60 + date.getUTCMinutes();
     const sessionMinute = minute <= 11 * 60 + 30 ? minute - (9 * 60 + 30) : 120 + minute - 13 * 60;
     return left + Math.max(0, Math.min(240, sessionMinute)) / 240 * plotWidth;
   };
@@ -320,6 +334,14 @@ function selectStock(index: number) {
   renderWatchlist();
   populatePositionEditor();
   disconnect?.();
+  latestUpdate = undefined;
+  candleSeries.setData([]);
+  document.querySelector<HTMLCanvasElement>("#intraday-chart")!.getContext("2d")!.clearRect(0, 0, 3000, 3000);
+  document.querySelectorAll<HTMLElement>(".stock-name").forEach(el => el.textContent = stocks[selectedIndex].name);
+  document.querySelector<HTMLElement>(".symbol")!.textContent = stocks[selectedIndex].symbol;
+  document.querySelectorAll<HTMLElement>(".price, .change").forEach(el => el.textContent = "--");
+  renderSparkline([], "flat");
+  if (isTauri) void invoke("update_tray_tooltip", { text: `${stocks[selectedIndex].name} ${stocks[selectedIndex].symbol}\n正在连接行情` });
   dailyRequestGeneration++; // 使在途的旧日K请求失效
   lastDailyFetch = 0;
   document.querySelector<HTMLElement>(".status-text")!.textContent = "连接真实行情…";
@@ -328,7 +350,12 @@ function selectStock(index: number) {
     saveStocks();
     render(update);
   }, message => {
-    document.querySelector<HTMLElement>(".status-text")!.textContent = `行情不可用 · ${message}`;
+    const status = document.querySelector<HTMLElement>(".status-text")!;
+    status.textContent = latestUpdate ? "报价待恢复 · 保留末笔" : "报价待恢复 · 悬停查看原因";
+    status.title = message;
+    document.querySelector(".status-dot")!.classList.remove("live");
+    document.querySelector(".status-dot")!.classList.add("stale");
+    document.querySelector(".compact-row")!.setAttribute("title", `${stocks[selectedIndex].name}\n${message}`);
   });
 }
 
@@ -425,6 +452,13 @@ async function restoreWindowPosition() {
 function saveStocks() { localStorage.setItem("stocks", JSON.stringify(stocks)); }
 
 function wireEvents() {
+  const sourceSelect = document.querySelector<HTMLSelectElement>("#quote-source")!;
+  sourceSelect.value = ["auto", "tencent", "sina", "eastmoney"].includes(savedSource) ? savedSource : "auto";
+  sourceSelect.addEventListener("change", () => {
+    localStorage.setItem("quoteSourcePreference", sourceSelect.value);
+    provider.setPreference(sourceSelect.value as SourcePreference);
+    selectStock(currentIndex);
+  });
   document.querySelectorAll<HTMLButtonElement>(".compact-button").forEach(button => button.addEventListener("click", () => void setCompact(!compact)));
   document.querySelectorAll<HTMLButtonElement>(".hide-button").forEach(button => button.addEventListener("click", () => void (isTauri && appWindow.hide())));
   const settings = document.querySelector(".settings")!;

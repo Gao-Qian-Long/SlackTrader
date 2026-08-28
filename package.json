@@ -1,13 +1,14 @@
 {
   "name": "bluetooth-assistant",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
     "build:portable": "tauri build --no-bundle",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "test": "node tests/market.test.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.8.0",

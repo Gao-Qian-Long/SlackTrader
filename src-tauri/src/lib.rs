@@ -28,7 +28,7 @@ fn http_client() -> &'static reqwest::Client {
     static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
     CLIENT.get_or_init(|| {
         reqwest::Client::builder()
-            .user_agent("Mozilla/5.0 BluetoothAssistant/0.1")
+            .user_agent("Mozilla/5.0 BluetoothAssistant/0.2")
             .timeout(Duration::from_secs(10))
             .redirect(reqwest::redirect::Policy::none())
             .build()
@@ -39,15 +39,85 @@ fn http_client() -> &'static reqwest::Client {
 #[tauri::command]
 async fn fetch_market_json(url: String) -> Result<String, String> {
     let parsed = reqwest::Url::parse(&url).map_err(|error| error.to_string())?;
-    match parsed.host_str() {
-        Some("push2.eastmoney.com") | Some("push2his.eastmoney.com") => {}
-        _ => return Err("market data host is not allowed".to_string()),
+    if !allowed_market_url(&parsed) { return Err("行情地址不在白名单".into()); }
+    let host = parsed.host_str().unwrap_or_default().to_owned();
+    let referer = if host == "hq.sinajs.cn" { "https://finance.sina.com.cn/" }
+        else if host.ends_with("gtimg.cn") { "https://gu.qq.com/" }
+        else { "https://quote.eastmoney.com/" };
+    let response = http_client().get(parsed).header("Referer", referer)
+        .send().await.map_err(|e| if e.is_timeout() { "请求超时（10秒）".to_string() }
+            else if e.is_connect() { format!("连接失败：{e}") } else { format!("传输中断：{e}") })?;
+    let status = response.status();
+    if !status.is_success() {
+        let wait_ms = response.headers().get("retry-after").and_then(|v| v.to_str().ok()).map(|v| {
+            v.parse::<u64>().ok().map(|seconds| seconds.saturating_mul(1000)).or_else(|| {
+                httpdate::parse_http_date(v).ok().map(|time| time.duration_since(std::time::SystemTime::now()).unwrap_or_default().as_millis() as u64)
+            }).unwrap_or(300_000)
+        }).unwrap_or(if status.as_u16() == 429 { 300_000 } else { 0 });
+        return Err(format!("HTTP {}{}; retryAfterMs={}", status.as_u16(), if status.as_u16() == 429 { "（请求限流）" } else { "" }, wait_ms));
     }
-    http_client()
-        .get(parsed)
-        .send().await.map_err(|error| error.to_string())?
-        .error_for_status().map_err(|error| error.to_string())?
-        .text().await.map_err(|error| error.to_string())
+    let bytes = response.bytes().await.map_err(|e| format!("读取行情失败：{e}"))?;
+    if bytes.len() > 2_000_000 { return Err("行情响应过大".into()); }
+    if host == "qt.gtimg.cn" || host == "hq.sinajs.cn" {
+        let (text, errors) = encoding_rs::GBK.decode_without_bom_handling(&bytes);
+        if errors { return Err("行情GBK编码异常".into()); }
+        Ok(text.into_owned())
+    } else { String::from_utf8(bytes.to_vec()).map_err(|_| "行情UTF-8编码异常".into()) }
+}
+
+fn allowed_market_url(url: &reqwest::Url) -> bool {
+    if url.scheme() != "https" || !url.username().is_empty() || url.password().is_some() || url.port_or_known_default() != Some(443) { return false; }
+    match url.host_str().unwrap_or_default() {
+        "push2.eastmoney.com" => url.path() == "/api/qt/stock/get",
+        "push2his.eastmoney.com" => matches!(url.path(), "/api/qt/stock/trends2/get" | "/api/qt/stock/kline/get"),
+        "qt.gtimg.cn" => url.path().strip_prefix("/q=").is_some_and(valid_quote_code),
+        "hq.sinajs.cn" => url.path().strip_prefix("/list=").is_some_and(valid_quote_code),
+        "web.ifzq.gtimg.cn" => matches!(url.path(), "/appstock/app/minute/query" | "/appstock/app/fqkline/get"),
+        _ => false,
+    }
+}
+
+fn valid_quote_code(code: &str) -> bool {
+    code.len() == 8 && ["sh", "sz", "bj"].iter().any(|prefix| code.starts_with(prefix)) && code.as_bytes()[2..].iter().all(u8::is_ascii_digit)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn market_allowlist() {
+        for url in ["https://qt.gtimg.cn/q=sh603118", "https://hq.sinajs.cn/list=sh603118", "https://web.ifzq.gtimg.cn/appstock/app/minute/query?code=sh603118"] {
+            assert!(allowed_market_url(&reqwest::Url::parse(url).unwrap()));
+        }
+        for url in ["http://qt.gtimg.cn/q=sh603118", "https://qt.gtimg.cn.evil.test/", "https://qt.gtimg.cn:444/", "https://user:pass@qt.gtimg.cn/", "https://web.ifzq.gtimg.cn/other"] {
+            assert!(!allowed_market_url(&reqwest::Url::parse(url).unwrap()));
+        }
+    }
+    #[test]
+    fn gbk_stock_name() {
+        let (text, errors) = encoding_rs::GBK.decode_without_bom_handling(&[0xb9,0xb2,0xbd,0xf8,0xb9,0xc9,0xb7,0xdd]);
+        assert_eq!(text, "共进股份"); assert!(!errors);
+    }
+    #[test]
+    #[ignore = "explicit live network verification only"]
+    fn live_backup_endpoints() {
+        tauri::async_runtime::block_on(async {
+            for (label,url,expected) in [
+                ("tencent quote", "https://qt.gtimg.cn/q=sh603118", "共进股份"),
+                ("sina quote", "https://hq.sinajs.cn/list=sh603118", "共进股份"),
+                ("tencent minute", "https://web.ifzq.gtimg.cn/appstock/app/minute/query?code=sh603118", "sh603118"),
+                ("tencent daily", "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=sh603118,day,,,90,qfq", "qfqday"),
+            ] {
+                let body = fetch_market_json(url.into()).await.expect(label);
+                assert!(body.contains(expected), "{label}: unexpected response");
+                if let Ok(dir) = std::env::var("MARKET_LIVE_OUTPUT") {
+                    std::fs::create_dir_all(&dir).unwrap();
+                    std::fs::write(std::path::Path::new(&dir).join(format!("{}.txt",label.replace(' ', "-"))), &body).unwrap();
+                }
+                println!("LIVE PASS {label}: decoded {} bytes", body.len());
+            }
+        });
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
