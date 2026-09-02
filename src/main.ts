@@ -1,7 +1,6 @@
 import "./styles.css";
 import { CandlestickSeries, ColorType, createChart, type BusinessDay, type IChartApi, type ISeriesApi } from "lightweight-charts";
 import { availableMonitors, currentMonitor, getCurrentWindow, LogicalSize, PhysicalPosition } from "@tauri-apps/api/window";
-import { invoke } from "@tauri-apps/api/core";
 import { register } from "@tauri-apps/plugin-global-shortcut";
 import { EastmoneyMarketProvider, normalizeInstrument, SECTOR_ALIASES } from "./market/eastmoneyProvider";
 import type { SourcePreference } from "./market/marketData";
@@ -15,8 +14,8 @@ const DEFAULT_STOCKS: Stock[] = [
 ];
 
 type ChartMode = "intraday" | "daily";
-type Theme = { background: string; text: string; muted: string; up: string; down: string; line: string; average: string };
-const DEFAULT_THEME: Theme = { background: "#22272b", text: "#8a9298", muted: "#596168", up: "#8e969c", down: "#737b81", line: "#858f96", average: "#686b6d" };
+type Theme = { background: string; text: string; muted: string; up: string; down: string; line: string; average: string; candleUp: string; candleDown: string };
+const DEFAULT_THEME: Theme = { background: "#22272b", text: "#8a9298", muted: "#596168", up: "#8e969c", down: "#737b81", line: "#858f96", average: "#686b6d", candleUp: "#df3f45", candleDown: "#20a66a" };
 
 function loadStocks(): Stock[] {
   try {
@@ -52,6 +51,7 @@ let isWindowDragging = false;
 let ignoreNextFocusLoss = false;
 let dailyRequestGeneration = 0;
 let lastDailyFetch = 0;
+let dailyZoomAdjusted = false;
 let themeRaf = 0;
 let microAnchorPosition: { x: number; y: number } | null = null;
 let positionSaveTimer = 0;
@@ -68,28 +68,29 @@ document.querySelector<HTMLDivElement>("#app")!.innerHTML = `
     <header class="topbar" data-drag-handle>
       <div class="identity" data-drag-handle><div class="stock-name">--</div><div class="symbol">------ · SH</div></div>
       <div class="quote" data-drag-handle><div class="price flat">--</div><div class="change flat" data-role="change-primary">-- &nbsp; --%</div></div>
-      <nav class="window-actions"><button class="icon-button compact-button" title="收回">${icons.shrink}</button><button class="icon-button hide-button" title="隐藏">${icons.hide}</button></nav>
+      <nav class="window-actions"><button class="icon-button compact-button" aria-label="收回">${icons.shrink}</button><button class="icon-button hide-button" aria-label="隐藏">${icons.hide}</button></nav>
     </header>
     <section class="chart-wrap">
       <div class="status-pill"><span class="status-dot"></span><span class="status-text">连接真实行情…</span></div>
       <div class="chart-tabs"><button data-mode="intraday">分时</button><button data-mode="daily">日K</button></div>
       <canvas id="intraday-chart"></canvas><div id="chart"></div>
     </section>
-    <footer class="footer"><div class="watchlist"></div><button class="icon-button settings-button" title="设置">${icons.settings}</button></footer>
+    <footer class="footer"><div class="watchlist"></div><button class="icon-button settings-button" aria-label="设置">${icons.settings}</button></footer>
     <aside class="settings">
       <div class="settings-title settings-drag">持仓编辑 <span>拖动窗口</span></div>
       <form class="stock-form"><input id="stock-code" inputmode="numeric" maxlength="6" placeholder="股票/板块代码" required><input id="stock-quantity" inputmode="decimal" placeholder="数量（板块可空）"><input id="stock-cost" inputmode="decimal" placeholder="成本（板块可空）"><button type="submit">保存</button></form>
       <div class="stock-form-actions"><span class="form-message"></span><button class="remove-stock" type="button">删除当前</button></div>
       <div class="settings-title theme-title">颜色与显示</div>
-      <div class="theme-grid">${([['background','背景'],['text','主文字'],['muted','次文字'],['up','上涨'],['down','下跌'],['line','分时线'],['average','均价线']] as [keyof Theme,string][]).map(([key,label]) => `<label><span>${label}</span><input type="color" data-theme="${key}" value="${theme[key]}"></label>`).join("")}</div>
+      <div class="theme-grid">${([['background','背景'],['text','主文字'],['muted','次文字'],['up','上涨'],['down','下跌'],['line','分时线'],['average','均价线'],['candleUp','K线上涨'],['candleDown','K线下跌']] as [keyof Theme,string][]).map(([key,label]) => `<label><span>${label}</span><input type="color" data-theme="${key}" value="${theme[key]}"></label>`).join("")}</div>
       <label class="setting-row"><span>透明度</span><input id="opacity" type="range" min="65" max="100" value="${opacity}"><output>${opacity}%</output></label>
       <button class="reset-theme" type="button">恢复低调配色</button>
       <div class="shortcut"><span>显示 / 隐藏</span><kbd>Alt + Shift + S</kbd></div>
       <label class="source-setting">个股报价优先级<select id="quote-source"><option value="auto">自动（腾讯优先）</option><option value="tencent">腾讯优先</option><option value="sina">新浪优先</option><option value="eastmoney">东方财富优先</option></select></label>
-      <div class="data-source">v0.3 · 报价5秒 / 分时30秒 · 休市降频<br>881129 使用同花顺原板块 · 无模拟回退</div>
+      <div class="data-source">v0.4 · 报价5秒 / 分时30秒 · 休市降频<br>881129 使用同花顺原板块 · 无模拟回退</div>
+      <details class="market-diagnostics"><summary>行情详情（点击查看）</summary><div id="market-details">等待行情</div></details>
       <div class="attribution">Charts by <a href="https://www.tradingview.com/" target="_blank">TradingView</a></div>
     </aside>
-    <div class="compact-row" data-drag-handle title="滚轮换股 · 双击展开 · 右键设置 · 中键隐藏"><span class="stock-name" data-drag-handle>--</span><svg class="spark" viewBox="0 0 42 18"><path fill="none" stroke-width="1" d=""/></svg><span class="price flat" data-drag-handle>--</span><span class="change flat" data-drag-handle data-role="change-secondary">--%</span><div class="compact-actions"><button class="icon-button compact-button" title="展开">${icons.shrink}</button></div></div>
+    <div class="compact-row" data-drag-handle aria-label="滚轮换股 · 双击展开 · 右键设置 · 中键隐藏"><span class="stock-name" data-drag-handle>--</span><svg class="spark" viewBox="0 0 42 18"><path fill="none" stroke-width="1" d=""/></svg><span class="price flat" data-drag-handle>--</span><span class="change flat" data-drag-handle data-role="change-secondary">--%</span><div class="compact-actions"><button class="icon-button compact-button" aria-label="展开">${icons.shrink}</button></div></div>
   </main>`;
 
 const shell = document.querySelector<HTMLElement>(".shell")!;
@@ -117,11 +118,11 @@ function setupChart() {
     grid: { vertLines: { color: "rgba(255,255,255,.025)" }, horzLines: { color: "rgba(255,255,255,.035)" } },
     rightPriceScale: { borderVisible: false, scaleMargins: { top: .12, bottom: .27 } },
     timeScale: { borderVisible: false, timeVisible: true, secondsVisible: false, tickMarkFormatter: formatTime, rightOffset: 4, barSpacing: 3.2, minBarSpacing: 1.3, fixLeftEdge: true },
-    crosshair: { vertLine: { color: "rgba(170,185,198,.20)", labelVisible: false }, horzLine: { color: "rgba(170,185,198,.18)", labelBackgroundColor: "#35414b" } },
+    crosshair: { vertLine: { color: "rgba(170,185,198,.20)", labelVisible: false }, horzLine: { color: "rgba(170,185,198,.18)", labelVisible: false } },
     handleScroll: { mouseWheel: false, pressedMouseMove: true, horzTouchDrag: true, vertTouchDrag: false },
     handleScale: { mouseWheel: false, pinch: false, axisPressedMouseMove: false },
   });
-  candleSeries = chart.addSeries(CandlestickSeries, { visible: false, upColor: theme.up, downColor: theme.down, borderVisible: false, wickUpColor: theme.up, wickDownColor: theme.down });
+  candleSeries = chart.addSeries(CandlestickSeries, { visible: false, upColor: theme.candleUp, downColor: theme.candleDown, borderVisible: false, wickUpColor: theme.candleUp, wickDownColor: theme.candleDown });
 }
 
 function applyTheme(next = theme) {
@@ -131,7 +132,7 @@ function applyTheme(next = theme) {
   localStorage.setItem("theme", JSON.stringify(theme));
   if (!chart) return;
   chart.applyOptions({ layout: { textColor: theme.muted } });
-  candleSeries.applyOptions({ upColor: theme.up, downColor: theme.down, wickUpColor: theme.up, wickDownColor: theme.down });
+  candleSeries.applyOptions({ upColor: theme.candleUp, downColor: theme.candleDown, wickUpColor: theme.candleUp, wickDownColor: theme.candleDown });
   drawIntradayChart();
   if (latestUpdate) {
     const changeClass = classForChange(latestUpdate.snapshot.change);
@@ -173,30 +174,19 @@ function render(update: QuoteUpdate) {
   primaryChange.innerHTML = `${snapshot.change >= 0 ? "+" : ""}${snapshot.change.toFixed(2)} &nbsp; ${snapshot.changePercent >= 0 ? "+" : ""}${snapshot.changePercent.toFixed(2)}%`;
   const compactPercent = `${snapshot.changePercent >= 0 ? "+" : ""}${snapshot.changePercent.toFixed(2)}%`;
   secondaryChange.textContent = metrics.hasPosition ? `${formatMoney(metrics.today, true)} ${compactPercent}` : compactPercent;
-  secondaryChange.title = metrics.hasPosition ? `今日盈亏 ${formatMoney(metrics.today)} · 涨跌幅 ${compactPercent}` : `涨跌幅 ${compactPercent}`;
   primaryChange.className = `change ${changeClass}`;
   secondaryChange.className = `change ${classForChange(metrics.hasPosition ? metrics.today : snapshot.change)}`;
   const statusText = document.querySelector<HTMLElement>(".status-text")!;
   statusText.textContent = metrics.hasPosition
     ? `今 ${formatMoney(metrics.today)} · 总 ${formatMoney(metrics.total)} · ${marketTime.slice(0, 5)}`
-    : chartMode === "daily" ? `日K · ${snapshot.stock.kind === "sector" ? "行业指数" : "前复权"} · ${marketTime.slice(0, 5)}` : `${oldTrade ? "末笔" : statusLabels[snapshot.status]} · ${marketTime}`;
+    : chartMode === "daily" ? `日K · 红涨绿跌 · Ctrl滚轮缩放` : `${oldTrade ? "末笔" : statusLabels[snapshot.status]} · ${marketTime}`;
   if (update.quoteError) statusText.textContent = `报价待恢复 · 最后数据 ${marketTime}`;
   else if (chartMode === "intraday" && update.historyMessage) statusText.textContent += " · 分时待更新";
-  statusText.title = `报价源：${update.quoteSource ?? "东方财富"} · 行情时间 ${marketDate} ${marketTime} 北京时间 · 分时源：${update.historySource ?? "待连接"}${update.historyMessage ? ` · ${update.historyMessage}` : ""}${update.quoteError ? ` · ${update.quoteError}` : ""}${metrics.hasPosition ? ` · 收益率 ${metrics.returnPercent >= 0 ? "+" : ""}${metrics.returnPercent.toFixed(2)}%` : ""}`;
+  document.querySelector<HTMLElement>("#market-details")!.textContent = `报价源：${update.quoteSource ?? "东方财富"} · 行情时间 ${marketDate} ${marketTime} 北京时间 · 分时源：${update.historySource ?? "待连接"}${update.historyMessage ? ` · ${update.historyMessage}` : ""}${update.quoteError ? ` · ${update.quoteError}` : ""}${metrics.hasPosition ? ` · 收益率 ${metrics.returnPercent >= 0 ? "+" : ""}${metrics.returnPercent.toFixed(2)}%` : ""}`;
   document.querySelector(".status-dot")!.classList.toggle("live", chartMode === "intraday" && snapshot.status === "trading" && !update.quoteError);
   document.querySelector(".status-dot")!.classList.toggle("stale", oldTrade || Boolean(update.quoteError));
-  document.querySelector(".compact-row")!.setAttribute("title", `${snapshot.stock.name} · ${update.quoteSource ?? "东方财富"} · ${marketTime}${update.quoteError ? " · 报价待恢复（保留末笔）" : ""}\n滚轮换股 · 双击展开 · 右键设置`);
   renderSparkline(history.slice(-36).map(point => point.price), changeClass);
   void renderChart();
-  if (isTauri) {
-    const sign = snapshot.change >= 0 ? "+" : "";
-    const detail = metrics.hasPosition
-      ? `今日 ${formatMoney(metrics.today)} | 总计 ${formatMoney(metrics.total)} (${metrics.returnPercent >= 0 ? "+" : ""}${metrics.returnPercent.toFixed(2)}%)`
-      : `今日 ${sign}${snapshot.change.toFixed(2)}  ${sign}${snapshot.changePercent.toFixed(2)}%`;
-    void invoke("update_tray_tooltip", {
-      text: `${snapshot.stock.name} ${snapshot.stock.symbol}${snapshot.stock.kind === "sector" ? " 板块" : ""}\n${detail}\n${update.quoteError ? "末笔" : "现价"} ${snapshot.price.toFixed(2)} · ${update.quoteSource} ${marketTime}${update.quoteError ? " · 待恢复" : ""}`,
-    });
-  }
 }
 
 const DAILY_REFRESH_MS = 60_000;
@@ -215,7 +205,7 @@ async function renderChart() {
     const candles = await provider.getDailyCandles(stocks[currentIndex]);
     if (generation !== dailyRequestGeneration || chartMode !== "daily") return;
     candleSeries.setData(candles.map(({ volume: _volume, time, ...candle }) => ({ ...candle, time: toBusinessDay(time) })));
-    chart.timeScale().fitContent();
+    if (!dailyZoomAdjusted) chart.timeScale().fitContent();
   } catch (error) {
     if (generation !== dailyRequestGeneration || chartMode !== "daily") return;
     document.querySelector<HTMLElement>(".status-text")!.textContent = error instanceof Error ? error.message : "日K获取失败";
@@ -309,7 +299,7 @@ function renderWatchlist() {
   stocks.forEach((stock, index) => {
     const tab = document.createElement("button");
     tab.className = `stock-tab ${index === currentIndex ? "active" : ""}`;
-    tab.title = stock.symbol;
+    tab.setAttribute("aria-label", `${stock.name} ${stock.symbol}`);
     tab.textContent = stock.name;
     tab.addEventListener("click", () => selectStock(index));
     list.appendChild(tab);
@@ -335,7 +325,7 @@ function selectStock(index: number) {
   populatePositionEditor();
   const sourceSelect = document.querySelector<HTMLSelectElement>("#quote-source")!;
   sourceSelect.disabled = stocks[currentIndex].kind === "sector";
-  sourceSelect.title = sourceSelect.disabled ? "板块固定使用对应原始数据源，个股优先级不适用" : "选择个股报价优先来源";
+  sourceSelect.setAttribute("aria-label", sourceSelect.disabled ? "板块固定使用对应原始数据源，个股优先级不适用" : "选择个股报价优先来源");
   disconnect?.();
   latestUpdate = undefined;
   candleSeries.setData([]);
@@ -344,21 +334,21 @@ function selectStock(index: number) {
   document.querySelector<HTMLElement>(".symbol")!.textContent = stocks[selectedIndex].symbol;
   document.querySelectorAll<HTMLElement>(".price, .change").forEach(el => el.textContent = "--");
   renderSparkline([], "flat");
-  if (isTauri) void invoke("update_tray_tooltip", { text: `${stocks[selectedIndex].name} ${stocks[selectedIndex].symbol}\n正在连接行情` });
   dailyRequestGeneration++; // 使在途的旧日K请求失效
   lastDailyFetch = 0;
+  dailyZoomAdjusted = false;
   document.querySelector<HTMLElement>(".status-text")!.textContent = "连接真实行情…";
+  document.querySelector<HTMLElement>("#market-details")!.textContent = "正在连接行情";
   disconnect = provider.connect(stocks[selectedIndex], update => {
     stocks[selectedIndex] = update.snapshot.stock;
     saveStocks();
     render(update);
   }, message => {
     const status = document.querySelector<HTMLElement>(".status-text")!;
-    status.textContent = latestUpdate ? "报价待恢复 · 保留末笔" : "报价待恢复 · 悬停查看原因";
-    status.title = message;
+    status.textContent = latestUpdate ? "报价待恢复 · 保留末笔" : "报价待恢复";
+    document.querySelector<HTMLElement>("#market-details")!.textContent = message;
     document.querySelector(".status-dot")!.classList.remove("live");
     document.querySelector(".status-dot")!.classList.add("stale");
-    document.querySelector(".compact-row")!.setAttribute("title", `${stocks[selectedIndex].name}\n${message}`);
   });
 }
 
@@ -370,7 +360,7 @@ function setChartMode(mode: ChartMode) {
   document.querySelector(".chart-wrap")!.classList.toggle("intraday", mode === "intraday");
   candleSeries.applyOptions({ visible: mode === "daily" });
   chart.applyOptions({ timeScale: { timeVisible: mode === "intraday" } });
-  if (mode === "daily") lastDailyFetch = 0; // 切换模式时立即拉取日K
+  if (mode === "daily") { lastDailyFetch = 0; dailyZoomAdjusted = false; } // 切换模式时立即拉取日K并复位范围
   if (latestUpdate) render(latestUpdate);
 }
 
@@ -512,7 +502,29 @@ function wireEvents() {
   });
   const slider = document.querySelector<HTMLInputElement>("#opacity")!;
   slider.addEventListener("input", () => { opacity = Number(slider.value); shell.style.opacity = String(opacity / 100); slider.nextElementSibling!.textContent = `${opacity}%`; localStorage.setItem("opacity", String(opacity)); });
-  window.addEventListener("wheel", event => { if (!settings.classList.contains("open")) selectStock(currentIndex + (event.deltaY > 0 ? 1 : -1)); }, { passive: true });
+  const dailyChart = document.querySelector<HTMLElement>("#chart")!;
+  dailyChart.addEventListener("wheel", event => {
+    if (chartMode !== "daily" || !event.ctrlKey) return;
+    event.preventDefault(); event.stopPropagation();
+    const scale = chart.timeScale();
+    const range = scale.getVisibleLogicalRange();
+    if (!range) return;
+    const span = Math.max(1, range.to - range.from);
+    const anchor = scale.coordinateToLogical(event.offsetX) ?? (range.from + range.to) / 2;
+    const ratio = Math.max(0, Math.min(1, (anchor - range.from) / span));
+    const nextSpan = Math.max(8, Math.min(150, span * (event.deltaY < 0 ? .8 : 1.25)));
+    scale.setVisibleLogicalRange({ from: anchor - nextSpan * ratio, to: anchor + nextSpan * (1 - ratio) });
+    dailyZoomAdjusted = true;
+  }, { passive: false });
+  dailyChart.addEventListener("dblclick", () => {
+    if (chartMode !== "daily") return;
+    dailyZoomAdjusted = false; chart.timeScale().fitContent();
+  });
+  window.addEventListener("wheel", event => {
+    if (event.ctrlKey) { event.preventDefault(); return; }
+    if ((event.target as Element).closest("#chart")) return;
+    if (!settings.classList.contains("open")) selectStock(currentIndex + (event.deltaY > 0 ? 1 : -1));
+  }, { passive: false });
   const compactRow = document.querySelector<HTMLElement>(".compact-row")!;
   compactRow.addEventListener("dblclick", () => void setCompact(false));
   compactRow.addEventListener("auxclick", event => { if (event.button === 1) void (isTauri && appWindow.hide()); });

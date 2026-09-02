@@ -18,17 +18,11 @@ fn toggle_window(app: &tauri::AppHandle) {
     }
 }
 
-#[tauri::command]
-fn update_tray_tooltip(app: tauri::AppHandle, text: String) -> Result<(), String> {
-    let tray = app.tray_by_id("main-tray").ok_or_else(|| "tray icon unavailable".to_string())?;
-    tray.set_tooltip(Some(text)).map_err(|error| error.to_string())
-}
-
 fn http_client() -> &'static reqwest::Client {
     static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
     CLIENT.get_or_init(|| {
         reqwest::Client::builder()
-            .user_agent("Mozilla/5.0 BluetoothAssistant/0.3")
+            .user_agent("Mozilla/5.0 BluetoothAssistant/0.4")
             .timeout(Duration::from_secs(10))
             .redirect(reqwest::redirect::Policy::none())
             .build()
@@ -179,7 +173,6 @@ pub fn run() {
 
             let _tray = TrayIconBuilder::with_id("main-tray")
                 .icon(app.default_window_icon().expect("missing application icon").clone())
-                .tooltip("蓝牙助手")
                 .menu(&menu)
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| match event.id.as_ref() {
@@ -205,7 +198,7 @@ pub fn run() {
                 let _ = window.hide();
             }
         })
-        .invoke_handler(tauri::generate_handler![update_tray_tooltip, fetch_market_json])
+        .invoke_handler(tauri::generate_handler![fetch_market_json])
         .run(tauri::generate_context!())
         .expect("error while running bluetooth assistant");
 }
