@@ -12,13 +12,13 @@ const ast = ts.createSourceFile('main.ts', main, ts.ScriptTarget.Latest, true);
 const draw = ast.statements.find(n => ts.isFunctionDeclaration(n) && n.name.text === 'drawIntradayChart').getText(ast);
 const theme = {volumeUp:'#8a6265',volumeDown:'#52766a',muted:'#596168',up:'#8e969c',down:'#737b81',line:'#858f96',average:'#686b6d'};
 const point = (time, price, volume) => ({time:Date.parse(`2026-09-03T${time}:00+08:00`)/1000,price,volume});
-function render(history, {width=300,height=112,ratio=1,compact=false,chartMode='intraday',detailed=false}={}) {
+function render(history, {width=300,height=112,ratio=1,compact=false,chartMode='intraday',detailed=false,sectorComparison=false}={}) {
   const bars=[],texts=[];
   const context = {globalAlpha:1,save(){this.savedAlpha=this.globalAlpha;},restore(){this.globalAlpha=this.savedAlpha;},
     fillRect(x,y,w,h){bars.push({x,y,w,h,color:this.fillStyle,alpha:this.globalAlpha});},fillText(text,x,y){texts.push({text,x,y});}};
   for(const key of ['setTransform','clearRect','beginPath','moveTo','lineTo','stroke','setLineDash','rect','clip'])context[key]=()=>{};
   const canvas = {clientWidth:width,clientHeight:height,getContext:()=>context};
-  vm.runInNewContext(compile(draw)+';drawIntradayChart();',{latestUpdate:{history,snapshot:{stock:{previousClose:10}}},compact,chartMode,detailed,
+  vm.runInNewContext(compile(draw)+';drawIntradayChart();',{latestUpdate:{history,snapshot:{stock:{previousClose:10}}},compact,chartMode,detailed,sectorComparison,
     theme,document:{querySelector:()=>canvas},window:{devicePixelRatio:ratio}});
   return {bars,texts,context,canvas};
 }
@@ -76,12 +76,18 @@ test('详细图扩大量柱并提供5个时间刻度和量轴',()=>{
   assert.equal(r.bars[0].h,64);assert.ok(r.bars[0].x>=43);assert.ok(r.bars[1].x+r.bars[1].w<=638-52);
   for(const text of ['09:30','10:30','11:30/13:00','14:00','15:00','1.0万','0'])assert.ok(r.texts.some(t=>t.text===text));
 });
+test('开启板块对照隐藏个股量柱，关闭后恢复，小面板保持量柱',()=>{
+  const h=[point('09:30',11,10000)];
+  assert.equal(render(h,{detailed:true,sectorComparison:true}).bars.length,0);
+  assert.equal(render(h,{detailed:true,sectorComparison:false}).bars.length,1);
+  assert.equal(render(h,{detailed:false,sectorComparison:true}).bars.length,1);
+});
 for (const scale of [1, 1.5, 2]) {
   const declarations=['setCompact','toggleDetailed'].map(name=>ast.statements.find(n=>ts.isFunctionDeclaration(n)&&n.name.text===name).getText(ast)).join('\n');
   const area={position:{x:-800,y:0},size:{width:800,height:500}};
   const state={position:{x:-250,y:450},size:{width:232*scale,height:28*scale},mode:'daily',button:{setAttribute(){}}};
   const context=vm.createContext({document:{body:{classList:{toggle(){}}},querySelector:s=>s==='.detail-button'?state.button:{classList:{remove(){}}}},
-    localStorage:{setItem(){}},isTauri:true,resizeGeneration:0,microAnchorPosition:null,compact:true,detailed:false,
+    localStorage:{setItem(){}},detailPanel:{sync(){}},isTauri:true,resizeGeneration:0,microAnchorPosition:null,compact:true,detailed:false,
     currentMonitor:async()=>({scaleFactor:scale,workArea:area}),
     appWindow:{outerPosition:async()=>state.position,outerSize:async()=>state.size,setPosition:async p=>{state.position=p;},setSize:async s=>{state.size={width:s.width*scale,height:s.height*scale};}},
     PhysicalPosition:class{constructor(x,y){this.x=x;this.y=y;}},LogicalSize:class{constructor(width,height){this.width=width;this.height=height;}},
@@ -89,8 +95,8 @@ for (const scale of [1, 1.5, 2]) {
   vm.runInContext(compile(declarations),context);
   await vm.runInContext('toggleDetailed()',context);
   assert.equal(state.mode,'intraday');assert.equal(state.button.textContent,'返回小图');assert.equal(context.compact,false);
-  assert.equal(state.size.width,Math.min(640,Math.floor(800/scale)-16)*scale);
-  assert.equal(state.size.height,Math.min(360,Math.floor(500/scale)-16)*scale);
+  assert.equal(state.size.width,Math.min(780,Math.floor(800/scale)-16)*scale);
+  assert.equal(state.size.height,Math.min(440,Math.floor(500/scale)-16)*scale);
   assert.ok(state.position.x>=-800&&state.position.x+state.size.width<=0&&state.position.y>=0&&state.position.y+state.size.height<=500);
   await vm.runInContext('toggleDetailed()',context);assert.equal(state.size.width,300*scale);assert.equal(state.button.textContent,'详细图');
   await vm.runInContext('toggleDetailed();',context);await vm.runInContext('setCompact(true)',context);

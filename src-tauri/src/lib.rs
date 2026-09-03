@@ -63,7 +63,8 @@ async fn fetch_market_json(url: String) -> Result<String, String> {
 fn allowed_market_url(url: &reqwest::Url) -> bool {
     if url.scheme() != "https" || !url.username().is_empty() || url.password().is_some() || url.port_or_known_default() != Some(443) { return false; }
     match url.host_str().unwrap_or_default() {
-        "push2.eastmoney.com" => url.path() == "/api/qt/stock/get",
+        "push2.eastmoney.com" => matches!(url.path(), "/api/qt/stock/get" | "/api/qt/slist/get" | "/api/qt/stock/details/get"),
+        "push2delay.eastmoney.com" => url.path() == "/api/qt/stock/trends2/get",
         "push2his.eastmoney.com" => matches!(url.path(), "/api/qt/stock/trends2/get" | "/api/qt/stock/kline/get"),
         "qt.gtimg.cn" => url.path().strip_prefix("/q=").is_some_and(valid_quote_code),
         "hq.sinajs.cn" => url.path().strip_prefix("/list=").is_some_and(valid_quote_code),
@@ -136,6 +137,34 @@ mod tests {
         }
     }
     #[test]
+    fn detail_allowlist() {
+        for url in ["https://push2.eastmoney.com/api/qt/slist/get?secid=0.000938", "https://push2.eastmoney.com/api/qt/stock/details/get?secid=0.000938", "https://push2delay.eastmoney.com/api/qt/stock/trends2/get?secid=90.BK1444"] {
+            assert!(allowed_market_url(&reqwest::Url::parse(url).unwrap()));
+        }
+        for url in ["https://push2delay.eastmoney.com/api/qt/stock/get", "https://push2.eastmoney.com/api/qt/stock/order", "https://push2.eastmoney.com.evil.test/api/qt/slist/get", "http://push2.eastmoney.com/api/qt/slist/get"] {
+            assert!(!allowed_market_url(&reqwest::Url::parse(url).unwrap()));
+        }
+    }
+    #[test]
+    #[ignore = "explicit live detail network verification only"]
+    fn live_detail_endpoints() {
+        tauri::async_runtime::block_on(async {
+            for (label,url,expected) in [
+                ("related", "https://push2.eastmoney.com/api/qt/slist/get?secid=0.000938&fields=f12,f14&pi=0&pz=200&po=1&np=1&fltt=2&invt=2&spt=3", "BK"),
+                ("trades", "https://push2.eastmoney.com/api/qt/stock/details/get?secid=0.000938&fields1=f1,f2,f3,f4,f5&fields2=f51,f52,f53,f54,f55&pos=-30&iscca=1", "details"),
+                ("sector", "https://push2delay.eastmoney.com/api/qt/stock/trends2/get?secid=90.BK1444&fields1=f1,f2,f3,f4,f5,f6,f7,f8,f9,f10,f11,f12,f13&fields2=f51,f52,f53,f54,f55,f56,f57,f58&ndays=1&iscr=0&iscca=0", "trends"),
+            ] {
+                let body = fetch_market_json(url.into()).await.expect(label);
+                assert!(body.contains(expected), "{label}: unexpected response");
+                if let Ok(dir) = std::env::var("MARKET_LIVE_OUTPUT") {
+                    std::fs::create_dir_all(&dir).unwrap();
+                    std::fs::write(std::path::Path::new(&dir).join(format!("{label}.txt")), &body).unwrap();
+                }
+                println!("LIVE_DETAIL_PASS {label}: {} bytes", body.len());
+            }
+        });
+    }
+    #[test]
     fn gbk_stock_name() {
         let (text, errors) = encoding_rs::GBK.decode_without_bom_handling(&[0xb9,0xb2,0xbd,0xf8,0xb9,0xc9,0xb7,0xdd]);
         assert_eq!(text, "共进股份"); assert!(!errors);
@@ -165,6 +194,7 @@ mod tests {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .setup(|app| {
             let toggle = MenuItem::with_id(app, "toggle", "显示 / 隐藏", true, None::<&str>)?;

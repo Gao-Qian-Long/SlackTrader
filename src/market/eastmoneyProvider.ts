@@ -116,7 +116,7 @@ export class EastmoneyMarketProvider implements MarketProvider {
       const change = round(latest.price - latest.previousClose);
       onUpdate({ history: visibleHistory, point: visibleHistory[visibleHistory.length-1] ?? { time: latest.timestamp/1000, price: latest.price, average: latest.price, volume: 0 },
         snapshot: { stock: { ...normalized, name: latest.name, previousClose: latest.previousClose }, price: latest.price, change,
-          changePercent: round((latest.price-latest.previousClose)/latest.previousClose*100), volume: latest.volume, timestamp: latest.timestamp, status: marketStatus(this.deps.now()) },
+          changePercent: round((latest.price-latest.previousClose)/latest.previousClose*100), volume: latest.volume, timestamp: latest.timestamp, status: marketStatus(this.deps.now()), orderBook: latest.orderBook },
         quoteSource: `${SOURCE_NAMES[quoteSource]}${latest.note ? `（${latest.note}）` : ""}`, quoteError,
         historySource: historySource ? SOURCE_NAMES[historySource] : undefined,
         historyMessage: history.length && !sameDate ? "分时日期与报价不一致，等待更新" : historyMessage });

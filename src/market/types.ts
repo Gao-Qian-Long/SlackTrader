@@ -37,7 +37,15 @@ export interface QuoteSnapshot {
   volume: number;
   status: MarketStatus;
   timestamp: number;
+  orderBook?: OrderBook;
 }
+
+export interface BookLevel { level: number; price: number; shares: number }
+export interface OrderBook { bids: BookLevel[]; asks: BookLevel[] }
+export interface RelatedSector { code: string; name: string }
+export interface SectorSeries { sector: RelatedSector; previousClose: number; history: IntradayPoint[]; source: string }
+export interface TradeDetail { time: string; price: number; shares: number; side: "buy" | "sell" | "neutral" }
+export interface TradePage { trades: TradeDetail[]; source: string; receivedAt: number }
 
 export interface QuoteUpdate {
   quoteSource?: string;

@@ -1,3 +1,5 @@
+import { version as APP_VERSION } from "../package.json";
+import { mountUpdatePanel } from "./updatePanel";
 import "./styles.css";
 import { CandlestickSeries, ColorType, createChart, type BusinessDay, type IChartApi, type ISeriesApi } from "lightweight-charts";
 import { availableMonitors, currentMonitor, getCurrentWindow, LogicalSize, PhysicalPosition } from "@tauri-apps/api/window";
@@ -5,6 +7,7 @@ import { register } from "@tauri-apps/plugin-global-shortcut";
 import { EastmoneyMarketProvider, normalizeInstrument, SECTOR_ALIASES } from "./market/eastmoneyProvider";
 import type { SourcePreference } from "./market/marketData";
 import type { QuoteUpdate, Stock } from "./market/types";
+import { DetailPanel } from "./detailPanel";
 
 const DEFAULT_STOCKS: Stock[] = [
   { symbol: "600519", name: "贵州茅台", previousClose: 1482.30, seed: 11 },
@@ -41,6 +44,7 @@ let chartMode = (localStorage.getItem("chartMode") as ChartMode | null) ?? "intr
 const hasMicroV2 = localStorage.getItem("microV2") === "ready";
 let compact = hasMicroV2 ? localStorage.getItem("compact") !== "false" : true;
 let detailed = false;
+let sectorComparison = localStorage.getItem("sectorComparison") === "true";
 localStorage.setItem("microV2", "ready");
 let opacity = Number(localStorage.getItem("opacity") ?? 82);
 let disconnect: (() => void) | undefined;
@@ -71,12 +75,14 @@ document.querySelector<HTMLDivElement>("#app")!.innerHTML = `
       <div class="quote" data-drag-handle><div class="price flat">--</div><div class="change flat" data-role="change-primary">-- &nbsp; --%</div></div>
       <nav class="window-actions"><button class="icon-button compact-button" aria-label="收回">${icons.shrink}</button><button class="icon-button hide-button" aria-label="隐藏">${icons.hide}</button></nav>
     </header>
-    <section class="chart-wrap">
+    <section class="market-layout"><div class="chart-column"><section class="chart-wrap">
       <div class="status-pill"><span class="status-dot"></span><span class="status-text">连接真实行情…</span></div>
       <div class="chart-tabs"><button data-mode="intraday">分时</button><button data-mode="daily">日K</button></div>
       <canvas id="intraday-chart"></canvas><div id="chart"></div>
-    </section>
-    <footer class="footer"><div class="watchlist"></div><button class="detail-button" aria-label="打开详细分时图" aria-pressed="false">详细图</button><button class="icon-button settings-button" aria-label="设置">${icons.settings}</button></footer>
+    </section><section class="sector-pane"><div class="sector-header"><span>关联板块</span><select id="related-sector" aria-label="选择关联板块"></select><span class="sector-meta"></span><button class="sector-retry" hidden type="button">重试</button></div><canvas id="sector-chart"></canvas></section></div>
+    <aside class="depth-panel" aria-label="市场五档盘口和成交明细"><div class="depth-heading">五档盘口 <span>金额：元</span></div><div class="book-status">等待报价</div><table class="book-table"><thead><tr><th>档位</th><th>价格</th><th>手数</th><th>金额</th></tr></thead><tbody class="book-rows"></tbody></table><div class="book-totals">五档买额 — · 卖额 —</div><div class="depth-heading trades-heading">分笔成交 <span>聚合记录 / 非逐笔</span></div><div class="trades-status">明细加载中</div><div class="trade-scroll"><table class="trade-table"><thead><tr><th>源时间</th><th>价格</th><th>手数</th><th>方向</th></tr></thead><tbody class="trade-rows"></tbody></table></div></aside></section>
+    <footer class="footer"><div class="watchlist"></div><button class="sector-toggle" aria-label="开关关联板块走势" aria-pressed="${sectorComparison}">板块</button><button class="detail-button" aria-label="打开详细分时图" aria-pressed="false">详细图</button><button class="icon-button settings-button" aria-label="设置">${icons.settings}</button></footer>
+    <div class="update-notice" hidden><span></span><button class="update-view" type="button">查看</button><button class="update-later" type="button">稍后</button></div>
     <aside class="settings">
       <div class="settings-title settings-drag">持仓编辑 <span>拖动窗口</span></div>
       <form class="stock-form"><input id="stock-code" inputmode="numeric" maxlength="6" placeholder="股票/板块代码" required><input id="stock-quantity" inputmode="decimal" placeholder="数量（板块可空）"><input id="stock-cost" inputmode="decimal" placeholder="成本（板块可空）"><button type="submit">保存</button></form>
@@ -87,7 +93,8 @@ document.querySelector<HTMLDivElement>("#app")!.innerHTML = `
       <button class="reset-theme" type="button">恢复低调配色</button>
       <div class="shortcut"><span>显示 / 隐藏</span><kbd>Alt + Shift + S</kbd></div>
       <label class="source-setting">个股报价优先级<select id="quote-source"><option value="auto">自动（腾讯优先）</option><option value="tencent">腾讯优先</option><option value="sina">新浪优先</option><option value="eastmoney">东方财富优先</option></select></label>
-      <div class="data-source">v0.4 · 报价5秒 / 分时30秒 · 休市降频<br>881129 使用同花顺原板块 · 无模拟回退</div>
+      <section class="update-panel" aria-label="软件更新"><div class="update-version"></div><div class="update-status" role="status"></div><progress hidden></progress><div class="update-actions"><button class="update-check" type="button">检查更新</button><button class="update-install" type="button" hidden>下载并安装</button></div><div class="update-hint">点击下载即同意校验后打开安装向导，软件将退出。覆盖安装保留持仓和设置。</div><pre class="update-notes" hidden></pre></section>
+      <div class="data-source">v${APP_VERSION} · 报价5秒 / 分时30秒 · 休市降频<br>881129 使用同花顺原板块 · 无模拟回退</div>
       <details class="market-diagnostics"><summary>行情详情（点击查看）</summary><div id="market-details">等待行情</div></details>
       <div class="attribution">Charts by <a href="https://www.tradingview.com/" target="_blank">TradingView</a></div>
     </aside>
@@ -95,6 +102,7 @@ document.querySelector<HTMLDivElement>("#app")!.innerHTML = `
   </main>`;
 
 const shell = document.querySelector<HTMLElement>(".shell")!;
+const detailPanel = new DetailPanel({ active: () => detailed && !compact && !document.hidden, compare: () => sectorComparison && chartMode === "intraday", stock: () => stocks[currentIndex], quote: () => latestUpdate, theme: () => theme });
 const statusLabels = { preopen: "等待开盘", trading: "实时行情", break: "午间休市", closed: "已收盘" };
 
 function toBusinessDay(date: string): BusinessDay {
@@ -135,6 +143,7 @@ function applyTheme(next = theme) {
   chart.applyOptions({ layout: { textColor: theme.muted } });
   candleSeries.applyOptions({ upColor: theme.candleUp, downColor: theme.candleDown, wickUpColor: theme.candleUp, wickDownColor: theme.candleDown });
   drawIntradayChart();
+  detailPanel.drawSector();
   if (latestUpdate) {
     const changeClass = classForChange(latestUpdate.snapshot.change);
     renderSparkline(latestUpdate.history.slice(-36).map(point => point.price), changeClass);
@@ -188,6 +197,7 @@ function render(update: QuoteUpdate) {
   document.querySelector(".status-dot")!.classList.toggle("stale", oldTrade || Boolean(update.quoteError));
   renderSparkline(history.slice(-36).map(point => point.price), changeClass);
   void renderChart();
+  detailPanel.renderBook(); detailPanel.drawSector();
 }
 
 const DAILY_REFRESH_MS = 60_000;
@@ -234,7 +244,7 @@ function drawIntradayChart() {
   }
   const previousClose = latestUpdate.snapshot.stock.previousClose;
     const left = detailed ? 43 : 29, right = width - (detailed ? 52 : 38), top = detailed ? 24 : 18, axisBottom = height - (detailed ? 22 : 14);
-    const volumeHeight = Math.max(0, Math.min(detailed ? 64 : 26, (axisBottom - top - 32) * .3));
+    const volumeHeight = detailed && sectorComparison ? 0 : Math.max(0, Math.min(detailed ? 64 : 26, (axisBottom - top - 32) * .3));
     const volumeTop = axisBottom - volumeHeight;
     const priceBottom = volumeHeight > 0 ? volumeTop - 5 : axisBottom;
   const priceHeight = Math.max(24, priceBottom - top);
@@ -270,7 +280,8 @@ function drawIntradayChart() {
     const timeMarks = detailed
       ? [{ minute: 0, label: "09:30" }, { minute: 60, label: "10:30" }, { minute: 120, label: "11:30/13:00" }, { minute: 180, label: "14:00" }, { minute: 240, label: "15:00" }]
       : [{ minute: 0, label: "09:30" }, { minute: 120, label: "11:30/13:00" }, { minute: 240, label: "15:00" }];
-  for (const mark of timeMarks) {
+    for (const mark of timeMarks) {
+    if (detailed && plotWidth < 300 && mark.minute !== 0 && mark.minute !== 240 && (plotWidth < 180 || mark.minute !== 120)) continue;
     const x = left + mark.minute / 240 * plotWidth;
     context.strokeStyle = "rgba(150,160,168,.08)";
     context.beginPath(); context.moveTo(x, top); context.lineTo(x, axisBottom); context.stroke();
@@ -360,6 +371,7 @@ function selectStock(index: number) {
   sourceSelect.setAttribute("aria-label", sourceSelect.disabled ? "板块固定使用对应原始数据源，个股优先级不适用" : "选择个股报价优先来源");
   disconnect?.();
   latestUpdate = undefined;
+  detailPanel.sync();
   candleSeries.setData([]);
   document.querySelector<HTMLCanvasElement>("#intraday-chart")!.getContext("2d")!.clearRect(0, 0, 3000, 3000);
   document.querySelectorAll<HTMLElement>(".stock-name").forEach(el => el.textContent = stocks[selectedIndex].name);
@@ -394,6 +406,7 @@ function setChartMode(mode: ChartMode) {
   chart.applyOptions({ timeScale: { timeVisible: mode === "intraday" } });
   if (mode === "daily") { lastDailyFetch = 0; dailyZoomAdjusted = false; } // 切换模式时立即拉取日K并复位范围
   if (latestUpdate) render(latestUpdate);
+  detailPanel.sync();
 }
 
 async function setCompact(next: boolean) {
@@ -405,12 +418,13 @@ async function setCompact(next: boolean) {
   detailButton.setAttribute("aria-label", detailed ? "返回小图" : "打开详细分时图");
   detailButton.setAttribute("aria-pressed", String(detailed));
   compact = next; localStorage.setItem("compact", String(compact)); document.body.classList.toggle("compact", compact);
+  detailPanel.sync();
   if (isTauri) {
     const generation = ++resizeGeneration;
     const [monitor, position, oldSize] = await Promise.all([currentMonitor(), appWindow.outerPosition(), appWindow.outerSize()]);
     if (generation !== resizeGeneration) return;
-    let logicalWidth = next ? 232 : detailed ? 640 : 300;
-    let logicalHeight = next ? 28 : detailed ? 360 : 176;
+    let logicalWidth = next ? 232 : detailed ? 780 : 300;
+    let logicalHeight = next ? 28 : detailed ? 440 : 176;
     let pendingPosition: PhysicalPosition | null = null;
     if (monitor) {
       const scale = monitor.scaleFactor;
@@ -503,6 +517,13 @@ function wireEvents() {
   });
   document.querySelectorAll<HTMLButtonElement>(".compact-button").forEach(button => button.addEventListener("click", () => void setCompact(!compact)));
   document.querySelector<HTMLButtonElement>(".detail-button")!.addEventListener("click", () => void toggleDetailed());
+  document.querySelector<HTMLButtonElement>(".sector-toggle")!.addEventListener("click", () => {
+    sectorComparison = !sectorComparison; localStorage.setItem("sectorComparison", String(sectorComparison));
+    document.querySelector(".sector-toggle")!.setAttribute("aria-pressed", String(sectorComparison));
+    if (sectorComparison && chartMode !== "intraday") setChartMode("intraday");
+    detailPanel.sync(); drawIntradayChart();
+  });
+  document.addEventListener("visibilitychange", () => detailPanel.sync());
   document.querySelectorAll<HTMLButtonElement>(".hide-button").forEach(button => button.addEventListener("click", () => void (isTauri && appWindow.hide())));
   const settings = document.querySelector(".settings")!;
   document.querySelector(".settings-button")!.addEventListener("click", () => settings.classList.toggle("open"));
@@ -573,6 +594,7 @@ function wireEvents() {
   window.addEventListener("wheel", event => {
     if (event.ctrlKey) { event.preventDefault(); return; }
     if ((event.target as Element).closest("#chart")) return;
+    if (detailed || (event.target as Element).closest("select,.depth-panel,.sector-pane")) return;
     if (!settings.classList.contains("open")) selectStock(currentIndex + (event.deltaY > 0 ? 1 : -1));
   }, { passive: false });
   const compactRow = document.querySelector<HTMLElement>(".compact-row")!;
@@ -636,4 +658,5 @@ selectStock(currentIndex);
 setChartMode(chartMode);
 if (isTauri) void initDesktop().then(() => setCompact(compact));
 else void setCompact(compact);
-window.addEventListener("beforeunload", () => disconnect?.());
+const disposeUpdater = mountUpdatePanel(shell, APP_VERSION, isTauri);
+window.addEventListener("beforeunload", () => { disconnect?.(); detailPanel.dispose(); disposeUpdater(); });

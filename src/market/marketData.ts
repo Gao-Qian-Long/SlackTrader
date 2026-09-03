@@ -1,4 +1,4 @@
-import type { DailyCandle, IntradayPoint, MarketStatus, Stock } from "./types";
+import type { DailyCandle, IntradayPoint, MarketStatus, Stock, OrderBook, BookLevel } from "./types";
 
 export type QuoteSource = "tencent" | "sina" | "eastmoney" | "ths";
 export type SourcePreference = "auto" | Exclude<QuoteSource, "ths">;
@@ -43,7 +43,15 @@ export function parseTime(value: string): number {
   if (!Number.isFinite(time)) throw new Error("行情时间格式错误");
   return time;
 }
-export interface WireQuote { name: string; price: number; previousClose: number; timestamp: number; volume: number; note?: string }
+export interface WireQuote { name: string; price: number; previousClose: number; timestamp: number; volume: number; note?: string; orderBook?: OrderBook }
+function parseBook(fields: string[], bidStart: number, askStart: number, priceFirst: boolean, shareMultiplier: number): OrderBook | undefined {
+  const side = (start: number): BookLevel[] => Array.from({ length: 5 }, (_, index) => {
+    const pair = fields.slice(start + index * 2, start + index * 2 + 2);
+    return { level: index + 1, price: Number(pair[priceFirst ? 0 : 1]), shares: Number(pair[priceFirst ? 1 : 0]) * shareMultiplier };
+  }).filter(row => Number.isFinite(row.price) && row.price > 0 && Number.isFinite(row.shares) && row.shares >= 0);
+  const bids = side(bidStart), asks = side(askStart);
+  return bids.length || asks.length ? { bids, asks } : undefined;
+}
 export function checkedQuote(q: WireQuote): WireQuote {
   if (!q.name || !Number.isFinite(q.price) || q.price <= 0 || !Number.isFinite(q.previousClose) || q.previousClose <= 0
       || !Number.isFinite(q.timestamp) || q.timestamp < Date.UTC(2000, 0, 1)) throw new Error("报价字段为空或异常");
@@ -52,12 +60,12 @@ export function checkedQuote(q: WireQuote): WireQuote {
 export function parseTencentQuote(raw: string, id: string): WireQuote {
   const fields = raw.match(new RegExp(`v_${id}="([^"]*)"`))?.[1].split("~");
   if (!fields || fields.length < 33 || fields[2] !== id.slice(2)) throw new Error("腾讯报价代码不匹配或为空");
-  return checkedQuote({ name: fields[1], price: Number(fields[3]), previousClose: Number(fields[4]), timestamp: parseTime(fields[30]), volume: Number(fields[6]) * 100 || 0 });
+  return checkedQuote({ name: fields[1], price: Number(fields[3]), previousClose: Number(fields[4]), timestamp: parseTime(fields[30]), volume: Number(fields[6]) * 100 || 0, orderBook: parseBook(fields, 9, 19, true, 100) });
 }
 export function parseSinaQuote(raw: string, id: string): WireQuote {
   const fields = raw.match(new RegExp(`hq_str_${id}="([^"]*)"`))?.[1].split(",");
   if (!fields || fields.length < 32) throw new Error("新浪报价代码不匹配或为空");
-  return checkedQuote({ name: fields[0], price: Number(fields[3]), previousClose: Number(fields[2]), timestamp: parseTime(`${fields[30]} ${fields[31]}`), volume: Number(fields[8]) || 0 });
+  return checkedQuote({ name: fields[0], price: Number(fields[3]), previousClose: Number(fields[2]), timestamp: parseTime(`${fields[30]} ${fields[31]}`), volume: Number(fields[8]) || 0, orderBook: parseBook(fields, 10, 20, false, 1) });
 }
 export function parseEastmoneyQuote(raw: string, id: string): WireQuote {
   const d = JSON.parse(raw).data;

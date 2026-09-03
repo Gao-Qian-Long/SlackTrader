@@ -66,6 +66,44 @@ button { color: inherit; }
 .icon-button svg { width: 11px; height: 11px; fill: none; stroke: currentColor; stroke-width: 1.7; }
 
 .chart-wrap { position: relative; min-height: 0; }
+.market-layout { display: flex; min-height: 0; min-width: 0; }
+.chart-column { display: grid; grid-template-rows: minmax(0, 1fr); min-width: 0; min-height: 0; flex: 1; }
+.sector-pane, .depth-panel, .sector-toggle { display: none; }
+body.detailed .depth-panel { display: flex; flex-direction: column; width: 192px; flex: 0 0 192px; min-height: 0; overflow: auto; padding: 4px 5px; border-left: 1px solid var(--line); font-size: 9px; font-variant-numeric: tabular-nums; scrollbar-width: thin; scrollbar-color: var(--muted) transparent; }
+body.detailed .sector-toggle { display: block; }
+body.detailed.sector-open .chart-column { grid-template-rows: minmax(0, 1fr) minmax(0, 1fr); }
+body.detailed.sector-open .sector-pane { display: block; position: relative; min-height: 0; border-top: 1px solid var(--line); }
+.sector-header { position: absolute; top: 3px; left: 6px; right: 6px; height: 21px; display: flex; align-items: center; gap: 5px; font-size: 9px; color: var(--muted); }
+.sector-header > span:first-child { flex: 0 0 auto; }
+#related-sector { min-width: 0; max-width: 135px; flex: 1; background: var(--background); color: var(--text); border: 1px solid var(--line); border-radius: 3px; font-size: 9px; padding: 1px; }
+.sector-meta { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; font-size: 8px; }
+.sector-retry { border: 0; background: transparent; color: var(--text); font-size: 9px; }
+#sector-chart { position: absolute; top: 25px; left: 0; width: 100%; height: calc(100% - 25px); }
+.depth-heading { display: flex; justify-content: space-between; font-size: 10px; line-height: 17px; flex: 0 0 auto; }
+.depth-heading span { font-size: 8px; color: var(--muted); }
+.book-status, .trades-status { color: var(--muted); font-size: 8px; line-height: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 0 0 auto; }
+.book-table, .trade-table { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 9px; }
+.book-table { flex: 0 0 auto; }
+.book-table th, .trade-table th { font-weight: 400; color: var(--muted); font-size: 8px; text-align: right; line-height: 15px; }
+.book-table td, .trade-table td { text-align: right; padding: 0 1px; line-height: 14px; overflow: hidden; white-space: nowrap; }
+.book-table th:first-child { width: 26px; }
+.book-table th:last-child { width: 53px; }
+.book-table th:first-child, .book-table td:first-child, .trade-table th:first-child, .trade-table td:first-child { text-align: left; }
+.book-table tr:nth-child(6) { border-top: 1px solid var(--line); }
+.book-totals { font-size: 8px; color: var(--muted); line-height: 20px; white-space: nowrap; }
+.trades-heading { border-top: 1px solid var(--line); }
+.trade-scroll { flex: 1; min-height: 56px; overflow: auto; scrollbar-width: thin; scrollbar-color: var(--muted) transparent; }
+.trade-table th:first-child { width: 48px; }
+.trade-table th:last-child { width: 23px; }
+.trade-table thead { position: sticky; top: 0; background: var(--background); }
+.market-buy { color: var(--volumeUp); }
+.market-sell { color: var(--volumeDown); }
+@media (max-width: 600px) {
+  body.detailed .depth-panel { width: 160px; flex-basis: 160px; padding: 3px; }
+  .book-table th:last-child { width: 44px; }
+  .book-table, .trade-table { font-size: 8px; }
+  .sector-header > span:first-child { display: none; }
+}
 #chart, #intraday-chart { position: absolute; inset: 0; width: 100%; height: 100%; }
 #intraday-chart { display: none; }
 .chart-wrap.intraday #chart { display: none; }
@@ -87,6 +125,8 @@ button { color: inherit; }
 .footer { position: relative; display: flex; align-items: center; gap: 3px; padding: 2px 29px 2px 5px; border-top: 1px solid var(--line); }
 .footer .settings-button { position: absolute; right: 3px; top: 3px; }
 .detail-button { flex: 0 0 auto; border: 0; border-radius: 4px; padding: 4px 5px; background: transparent; color: var(--muted); font-size: 9px; cursor: pointer; }
+.sector-toggle { flex: 0 0 auto; border: 0; border-radius: 4px; padding: 4px 5px; background: transparent; color: var(--muted); font-size: 9px; cursor: pointer; }
+.sector-toggle[aria-pressed="true"] { color: var(--text); background: rgba(255,255,255,.05); }
 .detail-button:hover { color: var(--text); background: rgba(255,255,255,.035); }
 body.detailed .chart-tabs { right: 52px; }
 body.detailed .status-pill { max-width: calc(100% - 155px); }
@@ -156,3 +196,18 @@ body.compact .topbar, body.compact .chart-wrap, body.compact .footer, body.compa
 body.compact .compact-row { display: flex; }
 body.compact:hover .compact-row { opacity: .72; }
 body.compact:hover .compact-actions { opacity: .6; }
+
+/* Update prompts remain inside expanded windows; no hover or desktop notices. */
+.update-notice { position: absolute; right: 6px; bottom: 30px; z-index: 4; display: flex; align-items: center; gap: 5px; padding: 3px 5px; border: 1px solid var(--line); border-radius: 5px; background: var(--background); color: var(--text); font-size: 10px; }
+.update-notice[hidden], .compact .update-notice { display: none; }
+.update-notice button, .update-actions button { font-size: 10px; padding: 3px 6px; }
+.update-panel { border-top: 1px solid var(--line); margin-top: 10px; padding-top: 8px; font-size: 10px; }
+.update-version { font-weight: 600; margin-bottom: 5px; }
+.update-status, .update-hint { line-height: 1.5; overflow-wrap: anywhere; }
+.update-hint { color: var(--muted); margin-top: 5px; }
+.update-actions { display: flex; gap: 6px; margin-top: 5px; }
+.update-panel progress { width: 100%; height: 5px; accent-color: var(--text); }
+.update-notes { font: inherit; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 90px; overflow: auto; color: var(--muted); }
+.settings-button.has-update { position: relative; }
+.settings-button.has-update::after { content: ''; position: absolute; right: 1px; top: 2px; width: 3px; height: 3px; border-radius: 50%; background: currentColor; }
+.update-notice button, .update-actions button { background: transparent; border: 1px solid var(--line); border-radius: 4px; cursor: pointer; }
