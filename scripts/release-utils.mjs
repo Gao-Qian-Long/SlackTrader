@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 export const repository = 'Gao-Qian-Long/SlackTrader';
+export function publicAssets(info) { return [info.installer, info.portable, 'latest.json']; }
 export function releaseInfo(version, tag) {
   if (!/^0\.(0|[1-9]\d*)\.0$/.test(version)) throw Error('Public v0.x releases use internal version 0.x.0; increment x for the next release');
   const expectedTag = `v${version.slice(0, -2)}`;

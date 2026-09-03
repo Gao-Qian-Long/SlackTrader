@@ -17,7 +17,7 @@ test('README包含隐私、限制、安装和免责声明',()=>{
   for(const heading of ['## 安装与升级','## 数据与隐私','## 已知限制','## 免责声明'])assert.ok(readme.includes(heading));
 });
 test('README发布资产统一指向当前版本',()=>{
-  for(const name of ['Setup-x64.exe','Portable-x64.exe','Source.zip'])assert.ok(readme.includes(`SlackTrader-${tag}-${name}`));
+  for(const name of ['Setup-x64.exe','Portable-x64.exe'])assert.ok(readme.includes(`SlackTrader-${tag}-${name}`));
   assert.doesNotMatch(readme,/SlackTrader-v0\.[0-3]-/);
 });
 test('README没有本地状态或内部调试记录',()=>assert.doesNotMatch(readme,/本地未发布|长期空白|内部调试|原始代码|用户个人/));

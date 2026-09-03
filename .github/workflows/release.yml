@@ -29,7 +29,7 @@ jobs:
         run: |
           $release = gh release view $env:RELEASE_TAG --json assets | ConvertFrom-Json
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $expected = @("SlackTrader-$env:RELEASE_TAG-Setup-x64.exe", "SlackTrader-$env:RELEASE_TAG-Setup-x64.exe.sig", "SlackTrader-$env:RELEASE_TAG-Portable-x64.exe", "SlackTrader-$env:RELEASE_TAG-Source.zip", 'latest.json', 'SHA256SUMS.txt')
+          $expected = @("SlackTrader-$env:RELEASE_TAG-Setup-x64.exe", "SlackTrader-$env:RELEASE_TAG-Portable-x64.exe", 'latest.json')
           $uploaded = @($release.assets | Where-Object { $_.size -gt 0 } | ForEach-Object { $_.name })
           $ready = @($expected | Where-Object { $_ -notin $uploaded }).Count -eq 0
           "ready=$($ready.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
@@ -62,7 +62,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $dir = Join-Path 'release' $env:RELEASE_TAG
-          $names = @("SlackTrader-$env:RELEASE_TAG-Setup-x64.exe", "SlackTrader-$env:RELEASE_TAG-Setup-x64.exe.sig", "SlackTrader-$env:RELEASE_TAG-Portable-x64.exe", "SlackTrader-$env:RELEASE_TAG-Source.zip", 'latest.json', 'SHA256SUMS.txt')
+          $names = @("SlackTrader-$env:RELEASE_TAG-Setup-x64.exe", "SlackTrader-$env:RELEASE_TAG-Portable-x64.exe", 'latest.json')
           foreach ($name in $names) {
             gh release upload $env:RELEASE_TAG (Join-Path $dir $name) --clobber
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

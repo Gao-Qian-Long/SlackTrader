@@ -3,7 +3,8 @@
 ## 用户侧
 
 - 启动约 5 秒后检查 GitHub 正式版本，之后每 6 小时检查；设置中可手动检查。
-- 提醒只出现在展开的软件窗口内，不使用桌面通知、托盘悬停提示，也不会自动展开窗口。
+- 检测到新版自动弹出“是否下载并更新”的系统确认框，微型或隐藏状态也会询问；选择“稍后”后同一版本不再自动打扰，手动检查可再次询问。确认后展开进度面板，下载并校验，随后打开安装向导。
+- 更新网络可选自动（直连优先，失败后尝试系统代理）、直连或系统代理；每条连接最多等待 20 秒。更新失败按网络超时、连接失败、清单缺失、格式异常分别提示，不修改系统代理设置。
 - 点击“下载并安装”才会下载。原生更新组件校验签名后打开可交互的 Windows 安装向导；成功打开向导时软件退出。完成安装后重新打开软件。
 - 下载、签名校验或安装向导启动失败时保持当前版本，允许重试。GitHub 访问失败或缺少更新清单不等于“已是最新”。
 - 覆盖安装使用相同应用标识和原安装位置；持仓、成本、配色、窗口位置仍保存在原 WebView2 数据目录。请勿在升级前卸载并删除应用数据，也不要手动清空该目录。
@@ -36,8 +37,8 @@ npm run release:build
 npm run release:build -- --tag v0.5 --notes release-notes.md
 ```
 
-3. `release/v0.x/` 生成六个发布资产：安装 EXE、对应 `.exe.sig`、便携 EXE、源码 ZIP、`latest.json`、`SHA256SUMS.txt`。源码 ZIP 包含当前工作区源文件，不含签名私钥、用户数据及构建缓存。
-4. 在 GitHub 创建同名 `v0.x` 的正式 Release，上传这六个文件，并将它设为 Latest。`latest.json` 应最后上传，避免清单先出现而安装包尚未上传。
+3. `release/v0.x/` 保留完整本地构建产物与校验资料。公开上传严格使用 `upload-assets.json` 列出的三个文件：安装 EXE、便携 EXE、`latest.json`。独立 `.sig` 的内容已嵌入更新清单；源码 ZIP、独立签名与校验和留在本地。GitHub 自动生成的 Source code (zip/tar.gz) 供用户下载源码。
+4. 在 GitHub 创建同名 `v0.x` 的正式 Release，上传这三个文件，并将它设为 Latest。`latest.json` 应最后上传，避免清单先出现而安装包尚未上传。
 
 更新入口固定为：
 
@@ -47,7 +48,7 @@ npm run release:build -- --tag v0.5 --notes release-notes.md
 
 ## GitHub Actions 自动发布附件
 
-仓库包含 `.github/workflows/release.yml`，正式 Release 发布后构建并上传上述资产，也支持输入已有 tag 手动运行。首次启用前由仓库维护者在 Settings → Secrets and variables → Actions 添加：
+仓库包含 `.github/workflows/release.yml`，正式 Release 发布后构建并只上传安装版、便携版和更新清单，也支持输入已有 tag 手动运行。首次启用前由仓库维护者在 Settings → Secrets and variables → Actions 添加：
 
 - `TAURI_SIGNING_PRIVATE_KEY`：与已安装客户端公钥对应的私钥文件完整内容。
 - `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`：密钥密码；无密码时留空。

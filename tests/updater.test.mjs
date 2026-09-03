@@ -4,7 +4,7 @@ import ts from 'typescript';
 import { releaseInfo, updateManifest, sourceFileAllowed } from '../scripts/release-utils.mjs';
 const out = new URL('../artifacts/updater/test-built/', import.meta.url); fs.mkdirSync(out, { recursive: true });
 fs.writeFileSync(new URL('updater.mjs', out), ts.transpileModule(fs.readFileSync(new URL('../src/updater.ts', import.meta.url), 'utf8'), { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext } }).outputText);
-const { UpdateController } = await import(new URL('updater.mjs', out));
+const { UpdateController, updateErrorMessage } = await import(new URL('updater.mjs', out));
 let passed = 0;
 async function test(name, fn) { await fn(); console.log('PASS ' + name); passed++; }
 const defer = () => { let resolve, reject; const promise = new Promise((a,b) => { resolve=a;reject=b; }); return {promise,resolve,reject}; };
@@ -14,8 +14,8 @@ function fixture(overrides = {}) {
   const controller = new UpdateController(async options => { events.push(options);return release; }, state => states.push(state));
   return {release,controller,events,states};
 }
-await test('检查只返回候选版本，禁用降级且有15秒超时，不自动安装', async () => {
-  const h=fixture();await h.controller.check();assert.equal(h.controller.state.phase,'available');assert.deepEqual(h.events,[{timeout:15000,allowDowngrades:false}]);
+await test('检查只返回候选版本，禁用降级且有20秒超时，不自动安装', async () => {
+  const h=fixture();await h.controller.check();assert.equal(h.controller.state.phase,'available');assert.deepEqual(h.events,[{timeout:20000,allowDowngrades:false}]);
 });
 await test('无更新显示最新；接口失败不误报最新', async () => {
   const c=new UpdateController(async()=>null,()=>{});await c.check();assert.equal(c.state.phase,'current');
@@ -61,5 +61,8 @@ await test('发布清单版本、平台、签名内容及安装地址一致',()=
 await test('发布源码排除私钥、环境文件、用户数据和缓存',()=>{
   for(const p of ['updater.key','signing/generate.log','.env','src/.env.production','secret.pem','artifacts/private.txt','release/file.exe','user-data-backup/state.json','src-tauri/target/app.exe'])assert.equal(sourceFileAllowed(p),false,p);
   for(const p of ['src/updater.ts','docs/UPDATING.md','.github/workflows/release.yml'])assert.equal(sourceFileAllowed(p),true,p);
+});
+await test('错误类型区分网络超时、缺少清单、清单损坏，不泄露原始详情',()=>{
+ assert.match(updateErrorMessage({code:'NETWORK_TIMEOUT'}),/超时/);assert.match(updateErrorMessage({code:'MANIFEST_UNAVAILABLE'}),/清单/);assert.match(updateErrorMessage({code:'MANIFEST_INVALID'}),/格式/);assert.doesNotMatch(updateErrorMessage({code:'NETWORK_FAILED',secret:'private'}),/private/);
 });
 console.log(`UPDATER_RESULT ${passed}/${passed} passed`);

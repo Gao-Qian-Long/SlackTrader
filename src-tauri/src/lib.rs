@@ -1,3 +1,4 @@
+mod updates;
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
@@ -195,6 +196,7 @@ mod tests {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .setup(|app| {
             let toggle = MenuItem::with_id(app, "toggle", "显示 / 隐藏", true, None::<&str>)?;
@@ -228,7 +230,7 @@ pub fn run() {
                 let _ = window.hide();
             }
         })
-        .invoke_handler(tauri::generate_handler![fetch_market_json])
+        .invoke_handler(tauri::generate_handler![fetch_market_json, updates::check_app_update])
         .run(tauri::generate_context!())
         .expect("error while running bluetooth assistant");
 }

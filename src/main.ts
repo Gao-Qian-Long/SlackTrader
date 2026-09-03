@@ -93,7 +93,7 @@ document.querySelector<HTMLDivElement>("#app")!.innerHTML = `
       <button class="reset-theme" type="button">恢复低调配色</button>
       <div class="shortcut"><span>显示 / 隐藏</span><kbd>Alt + Shift + S</kbd></div>
       <label class="source-setting">个股报价优先级<select id="quote-source"><option value="auto">自动（腾讯优先）</option><option value="tencent">腾讯优先</option><option value="sina">新浪优先</option><option value="eastmoney">东方财富优先</option></select></label>
-      <section class="update-panel" aria-label="软件更新"><div class="update-version"></div><div class="update-status" role="status"></div><progress hidden></progress><div class="update-actions"><button class="update-check" type="button">检查更新</button><button class="update-install" type="button" hidden>下载并安装</button></div><div class="update-hint">点击下载即同意校验后打开安装向导，软件将退出。覆盖安装保留持仓和设置。</div><pre class="update-notes" hidden></pre></section>
+      <section class="update-panel" aria-label="软件更新"><div class="update-version"></div><div class="update-status" role="status"></div><progress hidden></progress><label class="source-setting">更新网络<select class="update-network" aria-label="更新网络连接方式"><option value="auto">自动（直连优先）</option><option value="direct">直连</option><option value="system">系统代理</option></select></label><div class="update-route"></div><div class="update-actions"><button class="update-check" type="button">检查更新</button><button class="update-install" type="button" hidden>下载并安装</button></div><div class="update-hint">点击下载即同意校验后打开安装向导，软件将退出。覆盖安装保留持仓和设置。</div><pre class="update-notes" hidden></pre></section>
       <div class="data-source">v${APP_VERSION} · 报价5秒 / 分时30秒 · 休市降频<br>881129 使用同花顺原板块 · 无模拟回退</div>
       <details class="market-diagnostics"><summary>行情详情（点击查看）</summary><div id="market-details">等待行情</div></details>
       <div class="attribution">Charts by <a href="https://www.tradingview.com/" target="_blank">TradingView</a></div>
@@ -658,5 +658,11 @@ selectStock(currentIndex);
 setChartMode(chartMode);
 if (isTauri) void initDesktop().then(() => setCompact(compact));
 else void setCompact(compact);
-const disposeUpdater = mountUpdatePanel(shell, APP_VERSION, isTauri);
+const disposeUpdater = mountUpdatePanel(shell, APP_VERSION, isTauri, async () => {
+  if (isTauri) await appWindow.show();
+  await setCompact(false);
+  document.querySelector(".settings")!.classList.add("open");
+  document.querySelector(".update-panel")!.scrollIntoView({ block: "start" });
+  if (isTauri) await appWindow.setFocus();
+});
 window.addEventListener("beforeunload", () => { disconnect?.(); detailPanel.dispose(); disposeUpdater(); });
