@@ -20,23 +20,43 @@ jobs:
     env:
       RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
     steps:
+      - name: Detect already uploaded release assets
+        id: assets
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          $release = gh release view $env:RELEASE_TAG --json assets | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $expected = @("SlackTrader-$env:RELEASE_TAG-Setup-x64.exe", "SlackTrader-$env:RELEASE_TAG-Setup-x64.exe.sig", "SlackTrader-$env:RELEASE_TAG-Portable-x64.exe", "SlackTrader-$env:RELEASE_TAG-Source.zip", 'latest.json', 'SHA256SUMS.txt')
+          $uploaded = @($release.assets | Where-Object { $_.size -gt 0 } | ForEach-Object { $_.name })
+          $ready = @($expected | Where-Object { $_ -notin $uploaded }).Count -eq 0
+          "ready=$($ready.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
       - uses: actions/checkout@v4
+        if: steps.assets.outputs.ready != 'true'
         with:
           ref: ${{ env.RELEASE_TAG }}
       - uses: actions/setup-node@v4
+        if: steps.assets.outputs.ready != 'true'
         with:
           node-version: 22
           cache: npm
       - uses: dtolnay/rust-toolchain@stable
+        if: steps.assets.outputs.ready != 'true'
       - run: npm ci
+        if: steps.assets.outputs.ready != 'true'
       - run: npm test
+        if: steps.assets.outputs.ready != 'true'
       - name: Build signed installer and release metadata
+        if: steps.assets.outputs.ready != 'true'
         shell: pwsh
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: npm run release:build -- --tag "$env:RELEASE_TAG"
       - name: Upload update assets to the release
+        if: steps.assets.outputs.ready != 'true'
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}

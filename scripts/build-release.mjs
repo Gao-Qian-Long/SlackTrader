@@ -31,7 +31,7 @@ fs.mkdirSync(output, { recursive: true });
 const publicKey = path.join(output, 'updater.pub');
 fs.writeFileSync(publicKey, config.plugins.updater.pubkey);
 // Uses the same verifier as Tauri; checks the actual installer before publishing metadata.
-run('cargo', ['run', '--locked', '--release', '--example', 'verify-update', '--', exe, sig, publicKey], { cwd: path.join(root, 'src-tauri') });
+run('cargo', ['run', '--locked', '--release', '--features', 'tauri/custom-protocol', '--example', 'verify-update', '--', exe, sig, publicKey], { cwd: path.join(root, 'src-tauri') });
 fs.copyFileSync(exe, path.join(output, info.installer));
 fs.copyFileSync(sig, path.join(output, `${info.installer}.sig`));
 fs.copyFileSync('src-tauri/target/release/bluetooth-assistant.exe', path.join(output, info.portable));
