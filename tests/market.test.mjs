@@ -62,7 +62,7 @@ await test('东方财富精度0合法，板块代码隔离', () => {
 });
 await test('分时手/股换算和日K解析', () => {
   const points=data.parseTencentMinute(minute,'sh603118');
-  assert.equal(points[1].average,10.1); assert.equal(points[1].volume,20000);
+  assert.equal(points[1].average,10.1); assert.equal(points[0].volume,10000); assert.equal(points[1].volume,10000);
   assert.equal(data.parseTencentDaily(daily,'sh603118')[0].close,10.25);
   assert.equal(data.parseEastmoneyMinute(eastMinute).length,1);
 });

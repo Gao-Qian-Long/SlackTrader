@@ -16,6 +16,7 @@ export interface IntradayPoint {
   time: number;
   price: number;
   average?: number;
+  /** Volume in this minute (shares); adapters convert cumulative feeds first. */
   volume: number;
 }
 

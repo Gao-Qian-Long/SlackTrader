@@ -14,8 +14,8 @@ const DEFAULT_STOCKS: Stock[] = [
 ];
 
 type ChartMode = "intraday" | "daily";
-type Theme = { background: string; text: string; muted: string; up: string; down: string; line: string; average: string; candleUp: string; candleDown: string };
-const DEFAULT_THEME: Theme = { background: "#22272b", text: "#8a9298", muted: "#596168", up: "#8e969c", down: "#737b81", line: "#858f96", average: "#686b6d", candleUp: "#df3f45", candleDown: "#20a66a" };
+type Theme = { background: string; text: string; muted: string; up: string; down: string; line: string; average: string; candleUp: string; candleDown: string; volumeUp: string; volumeDown: string };
+const DEFAULT_THEME: Theme = { background: "#22272b", text: "#8a9298", muted: "#596168", up: "#8e969c", down: "#737b81", line: "#858f96", average: "#686b6d", candleUp: "#df3f45", candleDown: "#20a66a", volumeUp: "#8a6265", volumeDown: "#52766a" };
 
 function loadStocks(): Stock[] {
   try {
@@ -40,6 +40,7 @@ let currentIndex = Math.min(Number(localStorage.getItem("stockIndex") ?? 0), sto
 let chartMode = (localStorage.getItem("chartMode") as ChartMode | null) ?? "intraday";
 const hasMicroV2 = localStorage.getItem("microV2") === "ready";
 let compact = hasMicroV2 ? localStorage.getItem("compact") !== "false" : true;
+let detailed = false;
 localStorage.setItem("microV2", "ready");
 let opacity = Number(localStorage.getItem("opacity") ?? 82);
 let disconnect: (() => void) | undefined;
@@ -75,13 +76,13 @@ document.querySelector<HTMLDivElement>("#app")!.innerHTML = `
       <div class="chart-tabs"><button data-mode="intraday">分时</button><button data-mode="daily">日K</button></div>
       <canvas id="intraday-chart"></canvas><div id="chart"></div>
     </section>
-    <footer class="footer"><div class="watchlist"></div><button class="icon-button settings-button" aria-label="设置">${icons.settings}</button></footer>
+    <footer class="footer"><div class="watchlist"></div><button class="detail-button" aria-label="打开详细分时图" aria-pressed="false">详细图</button><button class="icon-button settings-button" aria-label="设置">${icons.settings}</button></footer>
     <aside class="settings">
       <div class="settings-title settings-drag">持仓编辑 <span>拖动窗口</span></div>
       <form class="stock-form"><input id="stock-code" inputmode="numeric" maxlength="6" placeholder="股票/板块代码" required><input id="stock-quantity" inputmode="decimal" placeholder="数量（板块可空）"><input id="stock-cost" inputmode="decimal" placeholder="成本（板块可空）"><button type="submit">保存</button></form>
       <div class="stock-form-actions"><span class="form-message"></span><button class="remove-stock" type="button">删除当前</button></div>
       <div class="settings-title theme-title">颜色与显示</div>
-      <div class="theme-grid">${([['background','背景'],['text','主文字'],['muted','次文字'],['up','上涨'],['down','下跌'],['line','分时线'],['average','均价线'],['candleUp','K线上涨'],['candleDown','K线下跌']] as [keyof Theme,string][]).map(([key,label]) => `<label><span>${label}</span><input type="color" data-theme="${key}" value="${theme[key]}"></label>`).join("")}</div>
+      <div class="theme-grid">${([['background','背景'],['text','主文字'],['muted','次文字'],['up','上涨'],['down','下跌'],['line','分时线'],['average','均价线'],['candleUp','K线上涨'],['candleDown','K线下跌'],['volumeUp','量柱上涨'],['volumeDown','量柱下跌']] as [keyof Theme,string][]).map(([key,label]) => `<label><span>${label}</span><input type="color" data-theme="${key}" value="${theme[key]}"></label>`).join("")}</div>
       <label class="setting-row"><span>透明度</span><input id="opacity" type="range" min="65" max="100" value="${opacity}"><output>${opacity}%</output></label>
       <button class="reset-theme" type="button">恢复低调配色</button>
       <div class="shortcut"><span>显示 / 隐藏</span><kbd>Alt + Shift + S</kbd></div>
@@ -232,8 +233,10 @@ function drawIntradayChart() {
     return;
   }
   const previousClose = latestUpdate.snapshot.stock.previousClose;
-  const left = 29, right = width - 38, top = 18, axisBottom = height - 14;
-  const priceBottom = axisBottom;
+    const left = detailed ? 43 : 29, right = width - (detailed ? 52 : 38), top = detailed ? 24 : 18, axisBottom = height - (detailed ? 22 : 14);
+    const volumeHeight = Math.max(0, Math.min(detailed ? 64 : 26, (axisBottom - top - 32) * .3));
+    const volumeTop = axisBottom - volumeHeight;
+    const priceBottom = volumeHeight > 0 ? volumeTop - 5 : axisBottom;
   const priceHeight = Math.max(24, priceBottom - top);
   const maxDeviation = Math.max(previousClose * .01, ...history.flatMap(point => [Math.abs(point.price - previousClose), Math.abs((point.average ?? point.price) - previousClose)])) * 1.12;
   const high = previousClose + maxDeviation;
@@ -247,7 +250,7 @@ function drawIntradayChart() {
   };
   const yForPrice = (value: number) => top + (high - value) / (high - low) * priceHeight;
 
-  context.font = '8px "Segoe UI", sans-serif';
+    context.font = `${detailed ? 10 : 8}px "Segoe UI", sans-serif`;
   context.lineWidth = 1;
   context.textBaseline = "middle";
   for (let index = 0; index < 5; index += 1) {
@@ -264,7 +267,9 @@ function drawIntradayChart() {
   }
   context.setLineDash([]);
 
-  const timeMarks = [{ minute: 0, label: "09:30" }, { minute: 120, label: "11:30/13:00" }, { minute: 240, label: "15:00" }];
+    const timeMarks = detailed
+      ? [{ minute: 0, label: "09:30" }, { minute: 60, label: "10:30" }, { minute: 120, label: "11:30/13:00" }, { minute: 180, label: "14:00" }, { minute: 240, label: "15:00" }]
+      : [{ minute: 0, label: "09:30" }, { minute: 120, label: "11:30/13:00" }, { minute: 240, label: "15:00" }];
   for (const mark of timeMarks) {
     const x = left + mark.minute / 240 * plotWidth;
     context.strokeStyle = "rgba(150,160,168,.08)";
@@ -281,7 +286,34 @@ function drawIntradayChart() {
     context.stroke();
   };
   if (history.every(point => point.average !== undefined && Number.isFinite(point.average))) drawLine(point => point.average!, theme.average, 1);
-  drawLine(point => point.price, theme.line, 1.35);
+    drawLine(point => point.price, theme.line, 1.35);
+
+    // Each point carries interval volume, not the day's cumulative volume.
+    // Price and volume share the same compressed trading-session time axis.
+    if (volumeHeight > 0) {
+      const maxVolume = Math.max(0, ...history.map(point => Number.isFinite(point.volume) ? point.volume : 0));
+      context.save();
+      context.beginPath(); context.rect(left, volumeTop, plotWidth, volumeHeight); context.clip();
+      context.globalAlpha = .65;
+      const barWidth = Math.max(.7, Math.min(3, plotWidth / 241 * .75));
+      history.forEach((point, index) => {
+        if (!Number.isFinite(point.volume) || point.volume <= 0 || maxVolume <= 0) return;
+        const previousPrice = index ? history[index - 1].price : previousClose;
+        context.fillStyle = point.price > previousPrice ? theme.volumeUp : point.price < previousPrice ? theme.volumeDown : theme.muted;
+        const barHeight = point.volume / maxVolume * volumeHeight;
+        const x = Math.max(left, Math.min(right - barWidth, xForTime(point.time) - barWidth / 2));
+        context.fillRect(x, axisBottom - barHeight, barWidth, barHeight);
+      });
+      context.restore();
+      context.fillStyle = theme.muted; context.textAlign = "right";
+      context.fillText(maxVolume > 0 ? "量" : "量—", left - 3, volumeTop + volumeHeight / 2);
+      if (detailed && maxVolume > 0) {
+        const formatVolume = (value: number) => value >= 1e8 ? `${(value / 1e8).toFixed(1)}亿` : value >= 1e4 ? `${(value / 1e4).toFixed(1)}万` : Math.round(value).toString();
+        context.textAlign = "left";
+        context.fillText(formatVolume(maxVolume), right + 4, volumeTop + 5);
+        context.fillText("0", right + 4, axisBottom - 5);
+      }
+    }
 }
 
 function renderSparkline(values: number[], changeClass: string) {
@@ -366,16 +398,26 @@ function setChartMode(mode: ChartMode) {
 
 async function setCompact(next: boolean) {
   const wasCompact = compact;
+  if (next) detailed = false;
+  document.body.classList.toggle("detailed", detailed);
+  const detailButton = document.querySelector<HTMLButtonElement>(".detail-button")!;
+  detailButton.textContent = detailed ? "返回小图" : "详细图";
+  detailButton.setAttribute("aria-label", detailed ? "返回小图" : "打开详细分时图");
+  detailButton.setAttribute("aria-pressed", String(detailed));
   compact = next; localStorage.setItem("compact", String(compact)); document.body.classList.toggle("compact", compact);
   if (isTauri) {
     const generation = ++resizeGeneration;
     const [monitor, position, oldSize] = await Promise.all([currentMonitor(), appWindow.outerPosition(), appWindow.outerSize()]);
     if (generation !== resizeGeneration) return;
-    const logicalWidth = next ? 232 : 300;
-    const logicalHeight = next ? 28 : 176;
+    let logicalWidth = next ? 232 : detailed ? 640 : 300;
+    let logicalHeight = next ? 28 : detailed ? 360 : 176;
     let pendingPosition: PhysicalPosition | null = null;
     if (monitor) {
       const scale = monitor.scaleFactor;
+      if (detailed) {
+        logicalWidth = Math.min(logicalWidth, Math.floor(monitor.workArea.size.width / scale) - 16);
+        logicalHeight = Math.min(logicalHeight, Math.floor(monitor.workArea.size.height / scale) - 16);
+      }
       const targetWidth = logicalWidth * scale;
       const targetHeight = logicalHeight * scale;
       const workLeft = monitor.workArea.position.x;
@@ -408,6 +450,13 @@ async function setCompact(next: boolean) {
     if (next && pendingPosition && generation === resizeGeneration) await appWindow.setPosition(pendingPosition);
   }
   if (!compact) setTimeout(() => { chart?.timeScale().fitContent(); drawIntradayChart(); }, 80);
+}
+
+async function toggleDetailed() {
+  detailed = !detailed;
+  document.querySelector(".settings")?.classList.remove("open");
+  if (detailed) setChartMode("intraday");
+  await setCompact(false);
 }
 
 async function toggleVisible() {
@@ -453,6 +502,7 @@ function wireEvents() {
     selectStock(currentIndex);
   });
   document.querySelectorAll<HTMLButtonElement>(".compact-button").forEach(button => button.addEventListener("click", () => void setCompact(!compact)));
+  document.querySelector<HTMLButtonElement>(".detail-button")!.addEventListener("click", () => void toggleDetailed());
   document.querySelectorAll<HTMLButtonElement>(".hide-button").forEach(button => button.addEventListener("click", () => void (isTauri && appWindow.hide())));
   const settings = document.querySelector(".settings")!;
   document.querySelector(".settings-button")!.addEventListener("click", () => settings.classList.toggle("open"));

@@ -25,7 +25,7 @@ button { color: inherit; }
 .shell {
   height: 100%;
   display: grid;
-  grid-template-rows: 44px 1fr 28px;
+  grid-template-rows: 26px 1fr 28px;
   background: color-mix(in srgb, var(--background) 88%, transparent);
   border: 1px solid rgba(255,255,255,.055);
   border-radius: 12px;
@@ -37,22 +37,25 @@ button { color: inherit; }
   position: relative;
   display: flex;
   align-items: center;
-  padding: 5px 49px 4px 9px;
-  gap: 6px;
+  padding: 2px 49px 2px 7px;
+  gap: 5px;
   border-bottom: 1px solid var(--line);
 }
 
-.identity { min-width: 75px; cursor: default; }
+.identity { display: flex; align-items: center; gap: 4px; flex: 1; min-width: 0; cursor: default; }
+.identity .stock-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; font-size: 10px; }
 .stock-name { font-size: 11px; font-weight: 600; letter-spacing: .01em; white-space: nowrap; }
-.symbol { margin-top: 2px; font-size: 8px; color: var(--muted); letter-spacing: .08em; }
-.quote { flex: 1; min-width: 0; text-align: right; }
-.price { font: 550 16px/1 "Segoe UI", sans-serif; letter-spacing: .01em; }
-.change { margin-top: 3px; font-size: 9px; font-variant-numeric: tabular-nums; }
+.symbol { flex: 0 0 auto; margin: 0; font-size: 7px; color: var(--muted); white-space: nowrap; }
+.quote { display: flex; align-items: center; gap: 5px; flex: 0 0 auto; min-width: 0; text-align: right; white-space: nowrap; }
+.quote .price { font-size: 13px; }
+.quote .change { margin: 0; font-size: 8px; }
+.price { font: 550 15px/1 "Segoe UI", sans-serif; letter-spacing: .01em; }
+.change { margin-top: 1px; font-size: 9px; font-variant-numeric: tabular-nums; }
 .up { color: var(--up); }
 .down { color: var(--down); }
 .flat { color: #aeb8c1; }
 
-.window-actions { position: absolute; right: 4px; top: 4px; z-index: 5; display: flex; gap: 1px; margin: 0; flex: 0 0 auto; }
+.window-actions { position: absolute; right: 4px; top: 2px; z-index: 5; display: flex; gap: 1px; margin: 0; flex: 0 0 auto; }
 .icon-button {
   width: 21px; height: 21px; display: grid; place-items: center;
   border: 0; border-radius: 6px; background: transparent; color: #7f8b95;
@@ -83,6 +86,14 @@ button { color: inherit; }
 
 .footer { position: relative; display: flex; align-items: center; gap: 3px; padding: 2px 29px 2px 5px; border-top: 1px solid var(--line); }
 .footer .settings-button { position: absolute; right: 3px; top: 3px; }
+.detail-button { flex: 0 0 auto; border: 0; border-radius: 4px; padding: 4px 5px; background: transparent; color: var(--muted); font-size: 9px; cursor: pointer; }
+.detail-button:hover { color: var(--text); background: rgba(255,255,255,.035); }
+body.detailed .chart-tabs { right: 52px; }
+body.detailed .status-pill { max-width: calc(100% - 155px); }
+body.detailed .identity .stock-name { font-size: 11px; }
+body.detailed .symbol { font-size: 9px; }
+body.detailed .quote .price { font-size: 15px; }
+body.detailed .quote .change { font-size: 10px; }
 .watchlist { flex: 1; display: flex; gap: 3px; min-width: 0; overflow: hidden; }
 .stock-tab {
   border: 0; background: transparent; border-radius: 5px; color: #727e88;

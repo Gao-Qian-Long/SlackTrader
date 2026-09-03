@@ -8,7 +8,7 @@
     "build": "tsc && vite build",
     "build:portable": "tauri build --no-bundle",
     "tauri": "tauri",
-    "test": "node tests/market.test.mjs && node tests/no-hover.test.mjs && node tests/chart-interaction.test.mjs && node tests/readme.test.mjs"
+    "test": "node tests/market.test.mjs && node tests/no-hover.test.mjs && node tests/chart-interaction.test.mjs && node tests/readme.test.mjs && node tests/intraday-volume.test.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.8.0",

@@ -76,13 +76,22 @@ export function parseTencentMinute(raw: string, id: string): IntradayPoint[] {
   const d = JSON.parse(raw).data?.[id]?.data;
   if (!d || !/^\d{8}$/.test(d.date) || !Array.isArray(d.data)) throw new Error("腾讯分时数据为空");
   const day = `${d.date.slice(0,4)}-${d.date.slice(4,6)}-${d.date.slice(6,8)}`;
-  return orderedPoints(d.data.map((row: string) => {
+  const points = orderedPoints(d.data.map((row: string) => {
     const [time, px, vol, amount] = row.trim().split(/\s+/);
     const price = Number(px), volume = Number(vol) * 100;
     const average = volume > 0 && Number(amount) > 0 ? Number(amount) / volume : price;
     return { time: parseTime(`${day} ${time.slice(0,2)}:${time.slice(2,4)}:00`) / 1000, price, volume,
       average: Number.isFinite(average) && average > 0 ? average : price };
   }));
+  // Tencent sends cumulative lots. Compute VWAP above before converting to
+  // interval shares, after time ordering/deduplication. Ignore invalid resets.
+  let previousVolume = 0;
+  return points.map(point => {
+    const cumulative = Number.isFinite(point.volume) && point.volume >= 0 ? point.volume : previousVolume;
+    const volume = Math.max(0, cumulative - previousVolume);
+    previousVolume = Math.max(previousVolume, cumulative);
+    return { ...point, volume };
+  });
 }
 export function parseEastmoneyMinute(raw: string): IntradayPoint[] {
   const rows = JSON.parse(raw).data?.trends;

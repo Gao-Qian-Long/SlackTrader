@@ -19,4 +19,7 @@ test('README发布资产统一指向v0.4',()=>{
   assert.doesNotMatch(readme,/SlackTrader-v0\.[0-3]-/);
 });
 test('README没有本地状态或内部调试记录',()=>assert.doesNotMatch(readme,/本地未发布|长期空白|内部调试|原始代码|用户个人/));
+test('README区分开发分支与已发布版本并说明详细图和量柱',()=>{
+  for(const text of ['## 开发分支更新','尚未更新到 Release 安装包','详细图','返回小图','分钟成交量','640 × 360'])assert.ok(readme.includes(text));
+});
 console.log(`README_RESULT ${passed}/${passed} passed`);
