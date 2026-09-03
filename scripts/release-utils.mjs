@@ -2,9 +2,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 export const repository = 'Gao-Qian-Long/SlackTrader';
-export function releaseInfo(version, tag = `v${version}`) {
-  if (!/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(version) || tag !== `v${version}`) throw Error('Use a stable vMAJOR.MINOR.PATCH tag matching the app version');
-  return { version, tag, installer: `SlackTrader-${tag}-Setup-x64.exe`, portable: `SlackTrader-${tag}-Portable-x64.exe`, source: `SlackTrader-${tag}-Source.zip` };
+export function releaseInfo(version, tag) {
+  if (!/^0\.(0|[1-9]\d*)\.0$/.test(version)) throw Error('Public v0.x releases use internal version 0.x.0; increment x for the next release');
+  const expectedTag = `v${version.slice(0, -2)}`;
+  tag ??= expectedTag;
+  if (tag !== expectedTag) throw Error('Use a v0.x release tag matching internal version 0.x.0');
+  return { version, tag, title: `SlackTrader ${tag}`, installer: `SlackTrader-${tag}-Setup-x64.exe`, portable: `SlackTrader-${tag}-Portable-x64.exe`, source: `SlackTrader-${tag}-Source.zip` };
 }
 export function updateManifest(info, signature, notes = '', date = new Date().toISOString()) {
   if (!signature.trim() || !Buffer.from(signature.trim(), 'base64').toString().includes('untrusted comment:')) throw Error('Missing updater signature');

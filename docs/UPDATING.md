@@ -25,7 +25,7 @@ npm run tauri signer generate -- --ci -w (Join-Path $keyDir 'updater.key')
 
 ## 本机构建和发布
 
-1. 将 `package.json`、`package-lock.json` 的版本（含 `packages[""].version`）、`src-tauri/Cargo.toml`、`src-tauri/Cargo.lock` 的应用包版本，以及 `src-tauri/tauri.conf.json` 同步更新为更高的三段版本号。
+1. 将 `package.json`、`package-lock.json` 的版本（含 `packages[""].version`）、`src-tauri/Cargo.toml`、`src-tauri/Cargo.lock` 的应用包版本，以及 `src-tauri/tauri.conf.json` 同步更新为更高的内部三段版本号 `0.x.0`。对外标题统一为 `SlackTrader v0.x`，Git 标签和附件名统一使用 `v0.x`；例如内部 `0.5.0` 对应 `v0.5`，下一版使用 `0.6.0` / `v0.6`。
 2. 执行测试和签名构建。脚本优先读取 `TAURI_SIGNING_PRIVATE_KEY`，否则读取本机 `%LOCALAPPDATA%\SlackTrader\signing\updater.key`。有密码的密钥同时设置 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`。
 
 ```powershell
@@ -33,11 +33,11 @@ npm ci
 npm test
 npm run release:build
 # 可选：显式核对 tag 并写入更新说明（版本须已同步）
-npm run release:build -- --tag v0.5.0 --notes release-notes.md
+npm run release:build -- --tag v0.5 --notes release-notes.md
 ```
 
-3. `release/v<版本>/` 生成六个发布资产：安装 EXE、对应 `.exe.sig`、便携 EXE、源码 ZIP、`latest.json`、`SHA256SUMS.txt`。源码 ZIP 包含当前工作区源文件，不含签名私钥、用户数据及构建缓存。
-4. 在 GitHub 创建同名 `v<三段版本号>` 的正式 Release，上传这六个文件，并将它设为 Latest。`latest.json` 应最后上传，避免清单先出现而安装包尚未上传。
+3. `release/v0.x/` 生成六个发布资产：安装 EXE、对应 `.exe.sig`、便携 EXE、源码 ZIP、`latest.json`、`SHA256SUMS.txt`。源码 ZIP 包含当前工作区源文件，不含签名私钥、用户数据及构建缓存。
+4. 在 GitHub 创建同名 `v0.x` 的正式 Release，上传这六个文件，并将它设为 Latest。`latest.json` 应最后上传，避免清单先出现而安装包尚未上传。
 
 更新入口固定为：
 
@@ -52,7 +52,7 @@ npm run release:build -- --tag v0.5.0 --notes release-notes.md
 - `TAURI_SIGNING_PRIVATE_KEY`：与已安装客户端公钥对应的私钥文件完整内容。
 - `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`：密钥密码；无密码时留空。
 
-工作流与源文件必须已进入发布 tag，tag 必须匹配代码中的三段版本号。发布后等待工作流成功，用户才能检测到完整更新。GitHub 网络访问及 WebView2 环境仍会影响检查、下载和安装。
+工作流与源文件必须已进入发布 tag，tag 使用 `v0.x`，必须匹配代码中的内部版本 `0.x.0`。更新清单的 `version` 仍使用三段版本号，以满足客户端版本比较。发布后等待工作流成功，用户才能检测到完整更新。GitHub 网络访问及 WebView2 环境仍会影响检查、下载和安装。
 
 本地构建不会自动提交代码、推送 tag、上传附件或配置远程 Secret。
 

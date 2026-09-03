@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing stable release tag (vMAJOR.MINOR.PATCH)
+        description: Existing stable release tag (v0.x, e.g. v0.6)
         required: true
         type: string
 permissions:
