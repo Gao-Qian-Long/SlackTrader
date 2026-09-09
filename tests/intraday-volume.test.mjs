@@ -87,7 +87,7 @@ for (const scale of [1, 1.5, 2]) {
   const area={position:{x:-800,y:0},size:{width:800,height:500}};
   const state={position:{x:-250,y:450},size:{width:232*scale,height:28*scale},mode:'daily',button:{setAttribute(){}}};
   const context=vm.createContext({document:{body:{classList:{toggle(){}}},querySelector:s=>s==='.detail-button'?state.button:{classList:{remove(){}}}},
-    localStorage:{setItem(){}},detailPanel:{sync(){}},isTauri:true,resizeGeneration:0,microAnchorPosition:null,compact:true,detailed:false,
+    localStorage:{setItem(){}},detailPanel:{sync(){}},isTauri:true,resizeGeneration:0,microAnchorPosition:null,compact:true,detailed:false,chartMode:'intraday',
     currentMonitor:async()=>({scaleFactor:scale,workArea:area}),
     appWindow:{outerPosition:async()=>state.position,outerSize:async()=>state.size,setPosition:async p=>{state.position=p;},setSize:async s=>{state.size={width:s.width*scale,height:s.height*scale};}},
     PhysicalPosition:class{constructor(x,y){this.x=x;this.y=y;}},LogicalSize:class{constructor(width,height){this.width=width;this.height=height;}},

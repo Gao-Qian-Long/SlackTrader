@@ -33,7 +33,13 @@ export function marketStatus(ms = Date.now()): MarketStatus {
   const date = new Date(ms + 8 * 3600_000);
   if ([0, 6].includes(date.getUTCDay())) return "closed";
   const minute = date.getUTCHours() * 60 + date.getUTCMinutes();
-  return minute < 570 ? "preopen" : minute < 690 ? "trading" : minute < 780 ? "break" : minute < 900 ? "trading" : "closed";
+  return minute < 555 ? "preopen" : minute < 570 ? "auction" : minute < 690 ? "trading" : minute < 780 ? "break" : minute < 900 ? "trading" : "closed";
+}
+export function isOpeningAuctionTime(ms: number): boolean {
+  const date = new Date(ms + 8 * 3600_000);
+  if ([0, 6].includes(date.getUTCDay())) return false;
+  const second = date.getUTCHours() * 3600 + date.getUTCMinutes() * 60 + date.getUTCSeconds();
+  return second >= 9 * 3600 + 15 * 60 && second <= 9 * 3600 + 25 * 60;
 }
 export function parseTime(value: string): number {
   const formatted = /^\d{14}$/.test(value)

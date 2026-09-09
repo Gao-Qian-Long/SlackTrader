@@ -70,6 +70,9 @@ await test('北京时区和周末、午休刷新状态', () => {
   assert.equal(data.marketStatus(Date.parse('2026-08-29T10:00:00+08:00')),'closed');
   assert.equal(data.marketStatus(Date.parse('2026-08-28T12:00:00+08:00')),'break');
   assert.equal(data.marketStatus(Date.parse('2026-08-28T10:00:00+08:00')),'trading');
+  assert.equal(data.marketStatus(Date.parse('2026-08-28T09:14:59+08:00')),'preopen');
+  assert.equal(data.marketStatus(Date.parse('2026-08-28T09:15:00+08:00')),'auction');
+  assert.equal(data.marketStatus(Date.parse('2026-08-28T09:29:59+08:00')),'auction');
 });
 await test('分时永久挂起时，报价独立到达；取消后迟到数据不回调', async () => {
   let resolveHistory; const updates=[];

@@ -1,4 +1,4 @@
-export type MarketStatus = "preopen" | "trading" | "break" | "closed";
+export type MarketStatus = "preopen" | "auction" | "trading" | "break" | "closed";
 
 export interface Stock {
   symbol: string;
@@ -18,6 +18,12 @@ export interface IntradayPoint {
   average?: number;
   /** Volume in this minute (shares); adapters convert cumulative feeds first. */
   volume: number;
+}
+
+/** A real quote sample received during the 09:15-09:25 opening auction. */
+export interface AuctionPoint extends IntradayPoint {
+  /** Cumulative auction-period volume reported by the quote source. */
+  reportedVolume: number;
 }
 
 export interface DailyCandle {
@@ -55,6 +61,8 @@ export interface QuoteUpdate {
   snapshot: QuoteSnapshot;
   point: IntradayPoint;
   history: IntradayPoint[];
+  auction?: AuctionPoint[];
+  auctionMessage?: string;
 }
 
 export interface MarketProvider {

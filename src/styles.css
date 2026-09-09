@@ -121,6 +121,8 @@ body.detailed.sector-open .sector-pane { display: block; position: relative; min
 .chart-tabs { position: absolute; z-index: 3; top: 3px; right: 38px; display: flex; gap: 1px; }
 .chart-tabs button { border: 0; padding: 2px 6px; border-radius: 4px; background: transparent; color: var(--muted); font-size: 9px; cursor: pointer; }
 .chart-tabs button:hover, .chart-tabs button.active { color: var(--text); background: rgba(255,255,255,.055); }
+.chart-tabs button[data-mode="auction"] { display: none; }
+body.detailed .chart-tabs button[data-mode="auction"] { display: block; }
 
 .footer { position: relative; display: flex; align-items: center; gap: 3px; padding: 2px 29px 2px 5px; border-top: 1px solid var(--line); }
 .footer .settings-button { position: absolute; right: 3px; top: 3px; }

@@ -8,6 +8,15 @@ test('日K默认使用红涨绿跌且颜色可调',()=>{
   assert.match(main,/upColor: theme\.candleUp/);assert.match(main,/downColor: theme\.candleDown/);
   assert.match(main,/\['candleUp','K线上涨'\]/);assert.match(main,/\['candleDown','K线下跌'\]/);
 });
+test('日K底部显示真实成交量并沿用可调红绿量柱颜色',()=>{
+  assert.match(main,/addSeries\(HistogramSeries/);
+  assert.match(main,/priceScaleId: "daily-volume"/);
+  assert.match(main,/scaleMargins: \{ top: \.78, bottom: 0 \}/);
+  assert.match(main,/value: Math\.max\(0, candle\.volume\)/);
+  assert.match(main,/candle\.close >= candle\.open \? theme\.volumeUp : theme\.volumeDown/);
+  assert.match(main,/dailyVolumeSeries\.applyOptions\(\{ visible: mode === "daily" \}\)/);
+  assert.match(main,/dailyVolumeSeries\.setData\(dailyVolumeData\(candles\)\)/);
+});
 test('Ctrl滚轮围绕鼠标位置缩放并限制范围',()=>{
   assert.match(main,/chartMode !== "daily" \|\| !event\.ctrlKey/);
   assert.match(main,/coordinateToLogical\(event\.offsetX\)/);

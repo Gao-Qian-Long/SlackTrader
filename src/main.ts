@@ -1,12 +1,12 @@
 import { version as APP_VERSION } from "../package.json";
 import { mountUpdatePanel } from "./updatePanel";
 import "./styles.css";
-import { CandlestickSeries, ColorType, createChart, type BusinessDay, type IChartApi, type ISeriesApi } from "lightweight-charts";
+import { CandlestickSeries, ColorType, createChart, HistogramSeries, type BusinessDay, type IChartApi, type ISeriesApi } from "lightweight-charts";
 import { availableMonitors, currentMonitor, getCurrentWindow, LogicalSize, PhysicalPosition } from "@tauri-apps/api/window";
 import { register } from "@tauri-apps/plugin-global-shortcut";
 import { EastmoneyMarketProvider, normalizeInstrument, SECTOR_ALIASES } from "./market/eastmoneyProvider";
-import type { SourcePreference } from "./market/marketData";
-import type { QuoteUpdate, Stock } from "./market/types";
+import { chinaDate, isOpeningAuctionTime, type SourcePreference } from "./market/marketData";
+import type { DailyCandle, QuoteUpdate, Stock } from "./market/types";
 import { DetailPanel } from "./detailPanel";
 
 const DEFAULT_STOCKS: Stock[] = [
@@ -16,7 +16,7 @@ const DEFAULT_STOCKS: Stock[] = [
   { symbol: "000300", name: "沪深300", previousClose: 4012.75, seed: 51 },
 ];
 
-type ChartMode = "intraday" | "daily";
+type ChartMode = "intraday" | "auction" | "daily";
 type Theme = { background: string; text: string; muted: string; up: string; down: string; line: string; average: string; candleUp: string; candleDown: string; volumeUp: string; volumeDown: string };
 const DEFAULT_THEME: Theme = { background: "#22272b", text: "#8a9298", muted: "#596168", up: "#8e969c", down: "#737b81", line: "#858f96", average: "#686b6d", candleUp: "#df3f45", candleDown: "#20a66a", volumeUp: "#8a6265", volumeDown: "#52766a" };
 
@@ -40,7 +40,8 @@ provider.setPreference((["auto", "tencent", "sina", "eastmoney"].includes(savedS
 let stocks = loadStocks();
 let theme = loadTheme();
 let currentIndex = Math.min(Number(localStorage.getItem("stockIndex") ?? 0), stocks.length - 1);
-let chartMode = (localStorage.getItem("chartMode") as ChartMode | null) ?? "intraday";
+const storedChartMode = localStorage.getItem("chartMode");
+let chartMode: ChartMode = storedChartMode === "daily" ? "daily" : "intraday";
 const hasMicroV2 = localStorage.getItem("microV2") === "ready";
 let compact = hasMicroV2 ? localStorage.getItem("compact") !== "false" : true;
 let detailed = false;
@@ -50,6 +51,8 @@ let opacity = Number(localStorage.getItem("opacity") ?? 82);
 let disconnect: (() => void) | undefined;
 let chart: IChartApi;
 let candleSeries: ISeriesApi<"Candlestick">;
+let dailyVolumeSeries: ISeriesApi<"Histogram">;
+let latestDailyCandles: DailyCandle[] = [];
 let latestUpdate: QuoteUpdate | undefined;
 let resizeGeneration = 0;
 let isWindowDragging = false;
@@ -77,7 +80,7 @@ document.querySelector<HTMLDivElement>("#app")!.innerHTML = `
     </header>
     <section class="market-layout"><div class="chart-column"><section class="chart-wrap">
       <div class="status-pill"><span class="status-dot"></span><span class="status-text">连接真实行情…</span></div>
-      <div class="chart-tabs"><button data-mode="intraday">分时</button><button data-mode="daily">日K</button></div>
+      <div class="chart-tabs"><button data-mode="auction">竞价</button><button data-mode="intraday">分时</button><button data-mode="daily">日K</button></div>
       <canvas id="intraday-chart"></canvas><div id="chart"></div>
     </section><section class="sector-pane"><div class="sector-header"><span>关联板块</span><select id="related-sector" aria-label="选择关联板块"></select><span class="sector-meta"></span><button class="sector-retry" hidden type="button">重试</button></div><canvas id="sector-chart"></canvas></section></div>
     <aside class="depth-panel" aria-label="市场五档盘口和成交明细"><div class="depth-heading">五档盘口 <span>金额：元</span></div><div class="book-status">等待报价</div><table class="book-table"><thead><tr><th>档位</th><th>价格</th><th>手数</th><th>金额</th></tr></thead><tbody class="book-rows"></tbody></table><div class="book-totals">五档买额 — · 卖额 —</div><div class="depth-heading trades-heading">分笔成交 <span>聚合记录 / 非逐笔</span></div><div class="trades-status">明细加载中</div><div class="trade-scroll"><table class="trade-table"><thead><tr><th>源时间</th><th>价格</th><th>手数</th><th>方向</th></tr></thead><tbody class="trade-rows"></tbody></table></div></aside></section>
@@ -103,7 +106,7 @@ document.querySelector<HTMLDivElement>("#app")!.innerHTML = `
 
 const shell = document.querySelector<HTMLElement>(".shell")!;
 const detailPanel = new DetailPanel({ active: () => detailed && !compact && !document.hidden, compare: () => sectorComparison && chartMode === "intraday", stock: () => stocks[currentIndex], quote: () => latestUpdate, theme: () => theme });
-const statusLabels = { preopen: "等待开盘", trading: "实时行情", break: "午间休市", closed: "已收盘" };
+const statusLabels = { preopen: "等待竞价", auction: "集合竞价", trading: "实时行情", break: "午间休市", closed: "已收盘" };
 
 function toBusinessDay(date: string): BusinessDay {
   const [year, month, day] = date.split("-").map(Number);
@@ -132,6 +135,18 @@ function setupChart() {
     handleScale: { mouseWheel: false, pinch: false, axisPressedMouseMove: false },
   });
   candleSeries = chart.addSeries(CandlestickSeries, { visible: false, upColor: theme.candleUp, downColor: theme.candleDown, borderVisible: false, wickUpColor: theme.candleUp, wickDownColor: theme.candleDown });
+  dailyVolumeSeries = chart.addSeries(HistogramSeries, {
+    visible: false, priceScaleId: "daily-volume", priceFormat: { type: "volume" },
+    priceLineVisible: false, lastValueVisible: false, color: theme.volumeUp,
+  });
+  chart.priceScale("daily-volume").applyOptions({ visible: false, scaleMargins: { top: .78, bottom: 0 } });
+}
+
+function dailyVolumeData(candles: DailyCandle[]) {
+  return candles.map(candle => ({
+    time: toBusinessDay(candle.time), value: Math.max(0, candle.volume),
+    color: candle.close >= candle.open ? theme.volumeUp : theme.volumeDown,
+  }));
 }
 
 function applyTheme(next = theme) {
@@ -142,6 +157,8 @@ function applyTheme(next = theme) {
   if (!chart) return;
   chart.applyOptions({ layout: { textColor: theme.muted } });
   candleSeries.applyOptions({ upColor: theme.candleUp, downColor: theme.candleDown, wickUpColor: theme.candleUp, wickDownColor: theme.candleDown });
+  dailyVolumeSeries.applyOptions({ color: theme.volumeUp });
+  if (latestDailyCandles.length) dailyVolumeSeries.setData(dailyVolumeData(latestDailyCandles));
   drawIntradayChart();
   detailPanel.drawSector();
   if (latestUpdate) {
@@ -167,7 +184,27 @@ function positionMetrics(update: QuoteUpdate) {
   return { quantity, cost, today, total, returnPercent, hasPosition: quantity > 0 && cost > 0 };
 }
 
+function retainAuctionForToday(update: QuoteUpdate) {
+  if (update.snapshot.stock.kind === "sector") return;
+  const date = chinaDate(update.snapshot.timestamp);
+  if (date !== chinaDate(Date.now())) return;
+  const key = `auctionHistoryV1:${update.snapshot.stock.symbol}`;
+  if (update.auction?.length) {
+    localStorage.setItem(key, JSON.stringify({ date, points: update.auction.slice(-360) }));
+    return;
+  }
+  try {
+    const saved = JSON.parse(localStorage.getItem(key) ?? "null") as { date?: string; points?: NonNullable<QuoteUpdate["auction"]> } | null;
+    const points = saved?.date === date && Array.isArray(saved.points) ? saved.points.filter(point =>
+      Number.isFinite(point.time) && Number.isFinite(point.price) && point.price > 0
+      && Number.isFinite(point.volume) && point.volume >= 0 && Number.isFinite(point.reportedVolume) && point.reportedVolume >= 0
+      && chinaDate(point.time * 1000) === date && isOpeningAuctionTime(point.time * 1000)) : [];
+    if (points.length) { update.auction = points; update.auctionMessage = undefined; }
+  } catch { localStorage.removeItem(key); }
+}
+
 function render(update: QuoteUpdate) {
+  retainAuctionForToday(update);
   latestUpdate = update;
   const { snapshot, history } = update;
   const changeClass = classForChange(snapshot.change);
@@ -189,11 +226,13 @@ function render(update: QuoteUpdate) {
   const statusText = document.querySelector<HTMLElement>(".status-text")!;
   statusText.textContent = metrics.hasPosition
     ? `今 ${formatMoney(metrics.today)} · 总 ${formatMoney(metrics.total)} · ${marketTime.slice(0, 5)}`
-    : chartMode === "daily" ? `日K · 红涨绿跌 · Ctrl滚轮缩放` : `${oldTrade ? "末笔" : statusLabels[snapshot.status]} · ${marketTime}`;
+    : chartMode === "daily" ? `日K · 红涨绿跌 · Ctrl滚轮缩放`
+      : chartMode === "auction" ? `${update.auction?.length ? `实时竞价 · ${update.auction.length}点` : update.auctionMessage ?? "竞价待更新"} · ${marketTime}`
+      : `${oldTrade ? "末笔" : statusLabels[snapshot.status]} · ${marketTime}`;
   if (update.quoteError) statusText.textContent = `报价待恢复 · 最后数据 ${marketTime}`;
   else if (chartMode === "intraday" && update.historyMessage) statusText.textContent += " · 分时待更新";
-  document.querySelector<HTMLElement>("#market-details")!.textContent = `报价源：${update.quoteSource ?? "东方财富"} · 行情时间 ${marketDate} ${marketTime} 北京时间 · 分时源：${update.historySource ?? "待连接"}${update.historyMessage ? ` · ${update.historyMessage}` : ""}${update.quoteError ? ` · ${update.quoteError}` : ""}${metrics.hasPosition ? ` · 收益率 ${metrics.returnPercent >= 0 ? "+" : ""}${metrics.returnPercent.toFixed(2)}%` : ""}`;
-  document.querySelector(".status-dot")!.classList.toggle("live", chartMode === "intraday" && snapshot.status === "trading" && !update.quoteError);
+  document.querySelector<HTMLElement>("#market-details")!.textContent = `报价源：${update.quoteSource ?? "东方财富"} · 行情时间 ${marketDate} ${marketTime} 北京时间 · 分时源：${update.historySource ?? "待连接"}${update.historyMessage ? ` · ${update.historyMessage}` : ""} · 竞价：${update.auction?.length ? `本次运行实时采集${update.auction.length}点` : update.auctionMessage ?? "待采集"}${update.quoteError ? ` · ${update.quoteError}` : ""}${metrics.hasPosition ? ` · 收益率 ${metrics.returnPercent >= 0 ? "+" : ""}${metrics.returnPercent.toFixed(2)}%` : ""}`;
+  document.querySelector(".status-dot")!.classList.toggle("live", ((chartMode === "intraday" && snapshot.status === "trading") || (chartMode === "auction" && snapshot.status === "auction")) && !update.quoteError);
   document.querySelector(".status-dot")!.classList.toggle("stale", oldTrade || Boolean(update.quoteError));
   renderSparkline(history.slice(-36).map(point => point.price), changeClass);
   void renderChart();
@@ -204,7 +243,7 @@ const DAILY_REFRESH_MS = 60_000;
 
 async function renderChart() {
   if (!latestUpdate) return;
-  if (chartMode === "intraday") {
+  if (chartMode === "intraday" || chartMode === "auction") {
     drawIntradayChart();
     return;
   }
@@ -215,7 +254,9 @@ async function renderChart() {
   try {
     const candles = await provider.getDailyCandles(stocks[currentIndex]);
     if (generation !== dailyRequestGeneration || chartMode !== "daily") return;
+    latestDailyCandles = candles;
     candleSeries.setData(candles.map(({ volume: _volume, time, ...candle }) => ({ ...candle, time: toBusinessDay(time) })));
+    dailyVolumeSeries.setData(dailyVolumeData(candles));
     if (!dailyZoomAdjusted) chart.timeScale().fitContent();
   } catch (error) {
     if (generation !== dailyRequestGeneration || chartMode !== "daily") return;
@@ -224,7 +265,7 @@ async function renderChart() {
 }
 
 function drawIntradayChart() {
-  if (!latestUpdate || chartMode !== "intraday" || compact) return;
+  if (!latestUpdate || !["intraday", "auction"].includes(chartMode) || compact) return;
   const canvas = document.querySelector<HTMLCanvasElement>("#intraday-chart")!;
   const width = canvas.clientWidth;
   const height = canvas.clientHeight;
@@ -236,10 +277,11 @@ function drawIntradayChart() {
   context.setTransform(ratio, 0, 0, ratio, 0, 0);
   context.clearRect(0, 0, width, height);
 
-  const history = latestUpdate.history;
+  const auctionMode = chartMode === "auction";
+  const history = auctionMode ? (latestUpdate.auction ?? []) : latestUpdate.history;
   if (!history.length) {
     context.font = '10px "Segoe UI", sans-serif'; context.fillStyle = theme.muted; context.textAlign = "center";
-    context.fillText("分时待更新，报价独立刷新", width / 2, height / 2);
+    context.fillText(auctionMode ? (latestUpdate.auctionMessage ?? "竞价数据待更新") : "分时待更新，报价独立刷新", width / 2, height / 2);
     return;
   }
   const previousClose = latestUpdate.snapshot.stock.previousClose;
@@ -255,8 +297,10 @@ function drawIntradayChart() {
   const xForTime = (timestamp: number) => {
     const date = new Date(timestamp * 1000 + 8 * 3600_000);
     const minute = date.getUTCHours() * 60 + date.getUTCMinutes();
-    const sessionMinute = minute <= 11 * 60 + 30 ? minute - (9 * 60 + 30) : 120 + minute - 13 * 60;
-    return left + Math.max(0, Math.min(240, sessionMinute)) / 240 * plotWidth;
+    const sessionMinute = auctionMode ? (minute * 60 + date.getUTCSeconds() - (9 * 60 + 15) * 60) / 60
+      : minute <= 11 * 60 + 30 ? minute - (9 * 60 + 30) : 120 + minute - 13 * 60;
+    const duration = auctionMode ? 10 : 240;
+    return left + Math.max(0, Math.min(duration, sessionMinute)) / duration * plotWidth;
   };
   const yForPrice = (value: number) => top + (high - value) / (high - low) * priceHeight;
 
@@ -277,16 +321,19 @@ function drawIntradayChart() {
   }
   context.setLineDash([]);
 
-    const timeMarks = detailed
+    const timeDuration = auctionMode ? 10 : 240;
+    const timeMarks = auctionMode
+      ? [{ minute: 0, label: "09:15" }, { minute: 5, label: "09:20" }, { minute: 10, label: "09:25" }]
+      : detailed
       ? [{ minute: 0, label: "09:30" }, { minute: 60, label: "10:30" }, { minute: 120, label: "11:30/13:00" }, { minute: 180, label: "14:00" }, { minute: 240, label: "15:00" }]
       : [{ minute: 0, label: "09:30" }, { minute: 120, label: "11:30/13:00" }, { minute: 240, label: "15:00" }];
     for (const mark of timeMarks) {
-    if (detailed && plotWidth < 300 && mark.minute !== 0 && mark.minute !== 240 && (plotWidth < 180 || mark.minute !== 120)) continue;
-    const x = left + mark.minute / 240 * plotWidth;
+    if (!auctionMode && detailed && plotWidth < 300 && mark.minute !== 0 && mark.minute !== timeDuration && (plotWidth < 180 || mark.minute !== 120)) continue;
+    const x = left + mark.minute / timeDuration * plotWidth;
     context.strokeStyle = "rgba(150,160,168,.08)";
     context.beginPath(); context.moveTo(x, top); context.lineTo(x, axisBottom); context.stroke();
     context.fillStyle = theme.muted;
-    context.textAlign = mark.minute === 0 ? "left" : mark.minute === 240 ? "right" : "center";
+    context.textAlign = mark.minute === 0 ? "left" : mark.minute === timeDuration ? "right" : "center";
     context.fillText(mark.label, x, height - 6);
   }
 
@@ -296,7 +343,7 @@ function drawIntradayChart() {
     history.forEach((point, index) => { const x = xForTime(point.time), y = yForPrice(selector(point)); index ? context.lineTo(x, y) : context.moveTo(x, y); });
     context.stroke();
   };
-  if (history.every(point => point.average !== undefined && Number.isFinite(point.average))) drawLine(point => point.average!, theme.average, 1);
+  if (!auctionMode && history.every(point => point.average !== undefined && Number.isFinite(point.average))) drawLine(point => point.average!, theme.average, 1);
     drawLine(point => point.price, theme.line, 1.35);
 
     // Each point carries interval volume, not the day's cumulative volume.
@@ -317,12 +364,21 @@ function drawIntradayChart() {
       });
       context.restore();
       context.fillStyle = theme.muted; context.textAlign = "right";
-      context.fillText(maxVolume > 0 ? "量" : "量—", left - 3, volumeTop + volumeHeight / 2);
+      context.fillText(maxVolume > 0 ? (auctionMode ? "成交量" : "量") : (auctionMode ? "成交量—" : "量—"), left - 3, volumeTop + volumeHeight / 2);
       if (detailed && maxVolume > 0) {
         const formatVolume = (value: number) => value >= 1e8 ? `${(value / 1e8).toFixed(1)}亿` : value >= 1e4 ? `${(value / 1e4).toFixed(1)}万` : Math.round(value).toString();
-        context.textAlign = "left";
-        context.fillText(formatVolume(maxVolume), right + 4, volumeTop + 5);
-        context.fillText("0", right + 4, axisBottom - 5);
+        if (auctionMode) {
+          const cumulativeVolume = Math.max(0, ...history.map(point => {
+            const value = Number((point as { reportedVolume?: number }).reportedVolume ?? 0);
+            return Number.isFinite(value) ? value : 0;
+          }));
+          context.textAlign = "right";
+          context.fillText(`累计 ${formatVolume(cumulativeVolume)}股`, right, volumeTop + 5);
+        } else {
+          context.textAlign = "left";
+          context.fillText(formatVolume(maxVolume), right + 4, volumeTop + 5);
+          context.fillText("0", right + 4, axisBottom - 5);
+        }
       }
     }
 }
@@ -381,6 +437,9 @@ function selectStock(index: number) {
   dailyRequestGeneration++; // 使在途的旧日K请求失效
   lastDailyFetch = 0;
   dailyZoomAdjusted = false;
+  latestDailyCandles = [];
+  candleSeries.setData([]);
+  dailyVolumeSeries.setData([]);
   document.querySelector<HTMLElement>(".status-text")!.textContent = "连接真实行情…";
   document.querySelector<HTMLElement>("#market-details")!.textContent = "正在连接行情";
   disconnect = provider.connect(stocks[selectedIndex], update => {
@@ -399,11 +458,12 @@ function selectStock(index: number) {
 function setChartMode(mode: ChartMode) {
   chartMode = mode;
   dailyRequestGeneration++; // 使在途的旧图表请求失效
-  localStorage.setItem("chartMode", mode);
+  localStorage.setItem("chartMode", mode === "auction" ? "intraday" : mode);
   document.querySelectorAll<HTMLButtonElement>(".chart-tabs button").forEach(button => button.classList.toggle("active", button.dataset.mode === mode));
-  document.querySelector(".chart-wrap")!.classList.toggle("intraday", mode === "intraday");
+  document.querySelector(".chart-wrap")!.classList.toggle("intraday", mode !== "daily");
   candleSeries.applyOptions({ visible: mode === "daily" });
-  chart.applyOptions({ timeScale: { timeVisible: mode === "intraday" } });
+  dailyVolumeSeries.applyOptions({ visible: mode === "daily" });
+  chart.applyOptions({ timeScale: { timeVisible: mode !== "daily" } });
   if (mode === "daily") { lastDailyFetch = 0; dailyZoomAdjusted = false; } // 切换模式时立即拉取日K并复位范围
   if (latestUpdate) render(latestUpdate);
   detailPanel.sync();
@@ -411,7 +471,10 @@ function setChartMode(mode: ChartMode) {
 
 async function setCompact(next: boolean) {
   const wasCompact = compact;
-  if (next) detailed = false;
+  if (next) {
+    detailed = false;
+    if (chartMode === "auction") setChartMode("intraday");
+  }
   document.body.classList.toggle("detailed", detailed);
   const detailButton = document.querySelector<HTMLButtonElement>(".detail-button")!;
   detailButton.textContent = detailed ? "返回小图" : "详细图";
@@ -469,7 +532,7 @@ async function setCompact(next: boolean) {
 async function toggleDetailed() {
   detailed = !detailed;
   document.querySelector(".settings")?.classList.remove("open");
-  if (detailed) setChartMode("intraday");
+  if (detailed || chartMode === "auction") setChartMode("intraday");
   await setCompact(false);
 }
 

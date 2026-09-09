@@ -1,8 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { DailyCandle, IntradayPoint, MarketProvider, QuoteUpdate, Stock } from "./types";
+import type { AuctionPoint, DailyCandle, IntradayPoint, MarketProvider, QuoteUpdate, Stock } from "./types";
 import { isTonghuashun, tonghuashunId, parseTonghuashunQuote, parseTonghuashunMinute, parseTonghuashunDaily, parseTonghuashunToday, mergeTonghuashunDaily } from "./tonghuashun";
 import { chinaDate, eastmoneyId, isSector, mainlandId, marketStatus, normalizeInstrument, parseEastmoneyDaily,
-  parseEastmoneyMinute, parseEastmoneyQuote, parseSinaQuote, parseTencentDaily, parseTencentMinute, parseTencentQuote,
+  parseEastmoneyMinute, parseEastmoneyQuote, parseSinaQuote, parseTencentDaily, parseTencentMinute, parseTencentQuote, isOpeningAuctionTime,
   round, SOURCE_NAMES, type QuoteSource, type SourcePreference, type WireQuote } from "./marketData";
 export { normalizeInstrument, SECTOR_ALIASES } from "./marketData";
 
@@ -20,6 +20,7 @@ export class EastmoneyMarketProvider implements MarketProvider {
   private preference: SourcePreference = "auto";
   private failures = new Map<string, { count: number; until: number; message: string }>();
   private cache = new Map<string, { at: number; promise: Promise<string> }>();
+  private auctionSamples = new Map<string, Map<number, AuctionPoint>>();
   constructor(deps: Partial<Dependencies> = {}) {
     this.deps = { request: url => invoke<string>("fetch_market_json", { url }), now: Date.now,
       schedule: (fn,ms) => window.setTimeout(fn,ms), cancel: id => window.clearTimeout(id), ...deps };
@@ -67,22 +68,23 @@ export class EastmoneyMarketProvider implements MarketProvider {
       parseTonghuashunMinute(await this.read(`https://d.10jqka.com.cn/${version}/time/${id}/last.js`, 29_000), id, version) })));
   }
   private async quote(stock: Stock) {
+    const quoteTtl = marketStatus(this.deps.now()) === "auction" ? 2500 : 4500;
     if (isTonghuashun(stock)) {
       const id = tonghuashunId(stock);
       return this.choose([
-        { source: "ths", key: "ths:quote", run: async () => parseTonghuashunQuote(await this.read(`https://d.10jqka.com.cn/v6/realhead/${id}/last.js`, 4500), id) },
+        { source: "ths", key: "ths:quote", run: async () => parseTonghuashunQuote(await this.read(`https://d.10jqka.com.cn/v6/realhead/${id}/last.js`, quoteTtl), id) },
         { source: "ths", key: "ths:quote-minute", run: async () => (await this.tonghuashunTime(stock)).value.quote },
       ]);
     }
     return this.choose(this.sources(stock).map(source => ({ source, key: `quote:${source}`, run: async () => {
       if (source === "eastmoney") {
         const id = eastmoneyId(stock);
-        return parseEastmoneyQuote(await this.read(`https://push2.eastmoney.com/api/qt/stock/get?secid=${id}&fields=f43,f57,f58,f59,f60,f86,f170`, 4500), id);
+        return parseEastmoneyQuote(await this.read(`https://push2.eastmoney.com/api/qt/stock/get?secid=${id}&fields=f43,f57,f58,f59,f60,f86,f170`, quoteTtl), id);
       }
       const id = mainlandId(stock);
       return source === "tencent"
-        ? parseTencentQuote(await this.read(`https://qt.gtimg.cn/q=${id}`, 4500), id)
-        : parseSinaQuote(await this.read(`https://hq.sinajs.cn/list=${id}`, 4500), id);
+        ? parseTencentQuote(await this.read(`https://qt.gtimg.cn/q=${id}`, quoteTtl), id)
+        : parseSinaQuote(await this.read(`https://hq.sinajs.cn/list=${id}`, quoteTtl), id);
     } })));
   }
   private chartSources(stock: Stock): ("tencent" | "eastmoney")[] {
@@ -108,13 +110,34 @@ export class EastmoneyMarketProvider implements MarketProvider {
     let latest: WireQuote | undefined, quoteSource: QuoteSource | undefined, historySource: QuoteSource | undefined;
     let history: IntradayPoint[] = [], historyMessage: string | undefined = "分时加载中";
     let quoteError: string | undefined;
+    const currentAuction = () => {
+      const key = `${normalized.symbol}:${chinaDate(this.deps.now())}`;
+      const samples = this.auctionSamples.get(key) ?? new Map<number, AuctionPoint>();
+      this.auctionSamples.set(key, samples);
+      return samples;
+    };
+    const captureAuction = () => {
+      if (!latest || isSector(normalized) || chinaDate(latest.timestamp) !== chinaDate(this.deps.now()) || !isOpeningAuctionTime(latest.timestamp)) return;
+      const auction = currentAuction();
+      // Record only source-timestamped auction quotes. Prices or history are never synthesized.
+      const second = Math.floor(latest.timestamp / 1000);
+      auction.set(second, { time: second, price: latest.price, average: latest.price, volume: 0, reportedVolume: Math.max(0, latest.volume) });
+      const ordered = [...auction.values()].sort((a,b) => a.time-b.time);
+      let previous = 0;
+      for (const point of ordered) { point.volume = Math.max(0, point.reportedVolume - previous); previous = Math.max(previous, point.reportedVolume); }
+      while (auction.size > 360) auction.delete(auction.keys().next().value!);
+    };
     const publish = () => {
       if (stopped || !latest || !quoteSource) return;
       // 跨交易日不把旧曲线画在新昨收坐标上；绝不生成分时价格。
       const sameDate = history.length > 0 && chinaDate(history[history.length-1].time * 1000) === chinaDate(latest.timestamp);
       const visibleHistory = sameDate ? history : [];
       const change = round(latest.price - latest.previousClose);
-      onUpdate({ history: visibleHistory, point: visibleHistory[visibleHistory.length-1] ?? { time: latest.timestamp/1000, price: latest.price, average: latest.price, volume: 0 },
+      captureAuction();
+      const auctionHistory = [...currentAuction().values()].sort((a,b) => a.time-b.time);
+      onUpdate({ history: visibleHistory, auction: auctionHistory,
+        auctionMessage: isSector(normalized) ? "板块不提供集合竞价" : auctionHistory.length ? undefined : "等待真实竞价报价（需在09:15-09:25运行）",
+        point: visibleHistory[visibleHistory.length-1] ?? { time: latest.timestamp/1000, price: latest.price, average: latest.price, volume: 0 },
         snapshot: { stock: { ...normalized, name: latest.name, previousClose: latest.previousClose }, price: latest.price, change,
           changePercent: round((latest.price-latest.previousClose)/latest.previousClose*100), volume: latest.volume, timestamp: latest.timestamp, status: marketStatus(this.deps.now()), orderBook: latest.orderBook },
         quoteSource: `${SOURCE_NAMES[quoteSource]}${latest.note ? `（${latest.note}）` : ""}`, quoteError,
@@ -135,7 +158,8 @@ export class EastmoneyMarketProvider implements MarketProvider {
         onError?.(quoteError);
       } finally {
         if (!stopped) {
-          const base = marketStatus(this.deps.now()) === "trading" ? 5000 : 60_000;
+          const status = marketStatus(this.deps.now());
+          const base = status === "auction" ? 3000 : status === "trading" ? 5000 : 60_000;
           quoteTimer = this.deps.schedule(() => void refreshQuote(), Math.min(300_000, base * 2 ** Math.min(quoteFailures,6)));
         }
       }
