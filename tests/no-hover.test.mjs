@@ -25,6 +25,13 @@ test('诊断详情默认折叠，只保留主动查看入口',()=>{
   assert.doesNotMatch(main,/market-diagnostics[^>]*\sopen[\s=>]/);
   assert.match(main,/#market-details/);assert.doesNotMatch(main,/悬停查看原因/);
 });
+test('行情检测只由用户点击触发，切源提示十秒后自动收起',()=>{
+  assert.match(main,/marketCheck\.addEventListener\("click"/);
+  assert.match(main,/await provider\.diagnoseCurrentStock\(stocks\[currentIndex\]\)/);
+  assert.doesNotMatch(main,/setInterval\([^)]*diagnoseCurrentStock/);
+  assert.match(main,/10_000 - \(Date\.now\(\) - update\.sourceSwitched\.at\)/);
+  assert.match(main,/clearTimeout\(sourceNoticeTimer\)/);
+});
 test('保留按钮和股票标签的无障碍名称',()=>{
   for(const label of ['展开','收回','隐藏','设置'])assert.ok(main.includes('aria-label="'+label+'"'));
   assert.match(main,/tab\.setAttribute\("aria-label"/);

@@ -1,9 +1,10 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { AuctionPoint, DailyCandle, IntradayPoint, MarketProvider, QuoteUpdate, Stock } from "./types";
+import type { AuctionPoint, DailyCandle, DiagnosticResult, IntradayPoint, MarketProvider, MarketRequestKind, MarketSource, QuoteUpdate, SourceSwitch, Stock } from "./types";
 import { isTonghuashun, tonghuashunId, parseTonghuashunQuote, parseTonghuashunMinute, parseTonghuashunDaily, parseTonghuashunToday, mergeTonghuashunDaily } from "./tonghuashun";
 import { chinaDate, eastmoneyId, isSector, mainlandId, marketStatus, normalizeInstrument, parseEastmoneyDaily,
   parseEastmoneyMinute, parseEastmoneyQuote, parseSinaQuote, parseTencentDaily, parseTencentMinute, parseTencentQuote, isOpeningAuctionTime,
   round, SOURCE_NAMES, type QuoteSource, type SourcePreference, type WireQuote } from "./marketData";
+import { ERROR_LABELS, LocalDiagnosticLog, SourceHealthTracker, classifyMarketError, freshness } from "./marketHealth";
 export { normalizeInstrument, SECTOR_ALIASES } from "./marketData";
 
 type Dependencies = {
@@ -12,20 +13,27 @@ type Dependencies = {
   schedule: (fn: () => void, ms: number) => number;
   cancel: (timer: number) => void;
 };
-const errorText = (error: unknown) => error instanceof Error ? error.message : String(error);
-
 // 保留旧导出名，使旧调用点和保存的观察列表继续兼容。
 export class EastmoneyMarketProvider implements MarketProvider {
   private deps: Dependencies;
   private preference: SourcePreference = "auto";
-  private failures = new Map<string, { count: number; until: number; message: string }>();
+  private health: SourceHealthTracker;
   private cache = new Map<string, { at: number; promise: Promise<string> }>();
   private auctionSamples = new Map<string, Map<number, AuctionPoint>>();
   constructor(deps: Partial<Dependencies> = {}) {
     this.deps = { request: url => invoke<string>("fetch_market_json", { url }), now: Date.now,
       schedule: (fn,ms) => window.setTimeout(fn,ms), cancel: id => window.clearTimeout(id), ...deps };
+    const storage = typeof localStorage === "undefined" ? undefined : localStorage;
+    this.health = new SourceHealthTracker(this.deps.now, new LocalDiagnosticLog(storage, this.deps.now));
   }
   setPreference(value: SourcePreference) { this.preference = value; }
+  getHealthSnapshot() { return this.health.snapshot(); }
+  private withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+    return new Promise((resolve, reject) => {
+      const timer = this.deps.schedule(() => reject(new Error("请求超时")), ms);
+      promise.then(value => { this.deps.cancel(timer); resolve(value); }, error => { this.deps.cancel(timer); reject(error); });
+    });
+  }
   private read(url: string, ttl: number): Promise<string> {
     const cached = this.cache.get(url);
     if (cached && this.deps.now() - cached.at < ttl) return cached.promise;
@@ -35,24 +43,22 @@ export class EastmoneyMarketProvider implements MarketProvider {
     void promise.catch(() => { if (this.cache.get(url)?.promise === promise) this.cache.delete(url); });
     return promise;
   }
-  private async choose<T>(candidates: { source: QuoteSource; key: string; run: () => Promise<T> }[]): Promise<{ source: QuoteSource; value: T }> {
+  private async choose<T>(kind: MarketRequestKind, candidates: { source: QuoteSource; key: string; run: () => Promise<T> }[], adaptive = this.preference === "auto"): Promise<{ source: QuoteSource; value: T }> {
     const errors: string[] = [];
-    for (const c of candidates) {
-      const previous = this.failures.get(c.key);
-      if (previous && previous.until > this.deps.now()) {
-        errors.push(`${SOURCE_NAMES[c.source]}冷却${Math.ceil((previous.until-this.deps.now())/1000)}秒：${previous.message}`);
+    for (const c of this.health.order(candidates, adaptive)) {
+      const previous = this.health.get(c.key);
+      if (previous && previous.cooldownUntil > this.deps.now()) {
+        errors.push(`${SOURCE_NAMES[c.source]}冷却${Math.ceil((previous.cooldownUntil-this.deps.now())/1000)}秒：${ERROR_LABELS[previous.lastErrorCode ?? "invalid_response"]}`);
         continue;
       }
+      const started = this.deps.now();
       try {
         const value = await c.run();
-        this.failures.delete(c.key);
+        this.health.success(c.key, kind, c.source, Math.max(0, this.deps.now() - started));
         return { source: c.source, value };
       } catch (error) {
-        const message = errorText(error);
-        const count = (previous?.count ?? 0) + 1;
-        const retryAfter = Number(/retryAfterMs=(\d+)/.exec(message)?.[1] ?? 0);
-        this.failures.set(c.key, { count, message, until: this.deps.now() + Math.max(retryAfter, Math.min(300_000, 30_000 * 2 ** Math.min(count-1,4))) });
-        errors.push(`${SOURCE_NAMES[c.source]}：${message}`);
+        const code = this.health.failure(c.key, kind, c.source, error, Math.max(0, this.deps.now() - started));
+        errors.push(`${SOURCE_NAMES[c.source]}：${ERROR_LABELS[code]}`);
       }
     }
     throw new Error(errors.join("；"));
@@ -64,28 +70,27 @@ export class EastmoneyMarketProvider implements MarketProvider {
   }
   private async tonghuashunTime(stock: Stock) {
     const id = tonghuashunId(stock);
-    return this.choose(["v6", "v4"].map(version => ({ source: "ths" as const, key: `ths:time:${version}`, run: async () =>
+    return this.choose("minute", ["v6", "v4"].map(version => ({ source: "ths" as const, key: `minute:ths:${version}`, run: async () =>
       parseTonghuashunMinute(await this.read(`https://d.10jqka.com.cn/${version}/time/${id}/last.js`, 29_000), id, version) })));
+  }
+  private async quoteFromSource(stock: Stock, source: Exclude<QuoteSource,"ths">, ttl: number, bypassCache = false) {
+    const id = source === "eastmoney" ? eastmoneyId(stock) : mainlandId(stock);
+    const url = source === "eastmoney"
+      ? `https://push2.eastmoney.com/api/qt/stock/get?secid=${id}&fields=f43,f57,f58,f59,f60,f86,f170`
+      : source === "tencent" ? `https://qt.gtimg.cn/q=${id}` : `https://hq.sinajs.cn/list=${id}`;
+    const raw = bypassCache ? await this.deps.request(url) : await this.read(url, ttl);
+    return source === "eastmoney" ? parseEastmoneyQuote(raw, id) : source === "tencent" ? parseTencentQuote(raw, id) : parseSinaQuote(raw, id);
   }
   private async quote(stock: Stock) {
     const quoteTtl = marketStatus(this.deps.now()) === "auction" ? 2500 : 4500;
     if (isTonghuashun(stock)) {
       const id = tonghuashunId(stock);
-      return this.choose([
+      return this.choose("quote", [
         { source: "ths", key: "ths:quote", run: async () => parseTonghuashunQuote(await this.read(`https://d.10jqka.com.cn/v6/realhead/${id}/last.js`, quoteTtl), id) },
         { source: "ths", key: "ths:quote-minute", run: async () => (await this.tonghuashunTime(stock)).value.quote },
       ]);
     }
-    return this.choose(this.sources(stock).map(source => ({ source, key: `quote:${source}`, run: async () => {
-      if (source === "eastmoney") {
-        const id = eastmoneyId(stock);
-        return parseEastmoneyQuote(await this.read(`https://push2.eastmoney.com/api/qt/stock/get?secid=${id}&fields=f43,f57,f58,f59,f60,f86,f170`, quoteTtl), id);
-      }
-      const id = mainlandId(stock);
-      return source === "tencent"
-        ? parseTencentQuote(await this.read(`https://qt.gtimg.cn/q=${id}`, quoteTtl), id)
-        : parseSinaQuote(await this.read(`https://hq.sinajs.cn/list=${id}`, quoteTtl), id);
-    } })));
+    return this.choose("quote", this.sources(stock).map(source => ({ source, key: `quote:${source}`, run: () => this.quoteFromSource(stock, source as Exclude<QuoteSource,"ths">, quoteTtl) })));
   }
   private chartSources(stock: Stock): ("tencent" | "eastmoney")[] {
     if (isSector(stock)) return ["eastmoney"];
@@ -96,7 +101,7 @@ export class EastmoneyMarketProvider implements MarketProvider {
       const result = await this.tonghuashunTime(stock);
       return { source: result.source, value: result.value.history };
     }
-    return this.choose(this.chartSources(stock).map(source => ({ source, key: `minute:${source}`, run: async () => {
+    return this.choose("minute", this.chartSources(stock).map(source => ({ source, key: `minute:${source}`, run: async () => {
       if (source === "tencent") {
         const id = mainlandId(stock);
         return parseTencentMinute(await this.read(`https://web.ifzq.gtimg.cn/appstock/app/minute/query?code=${id}`, 29_000), id);
@@ -110,6 +115,7 @@ export class EastmoneyMarketProvider implements MarketProvider {
     let latest: WireQuote | undefined, quoteSource: QuoteSource | undefined, historySource: QuoteSource | undefined;
     let history: IntradayPoint[] = [], historyMessage: string | undefined = "分时加载中";
     let quoteError: string | undefined;
+    let sourceSwitched: SourceSwitch | undefined;
     const currentAuction = () => {
       const key = `${normalized.symbol}:${chinaDate(this.deps.now())}`;
       const samples = this.auctionSamples.get(key) ?? new Map<number, AuctionPoint>();
@@ -133,27 +139,37 @@ export class EastmoneyMarketProvider implements MarketProvider {
       const sameDate = history.length > 0 && chinaDate(history[history.length-1].time * 1000) === chinaDate(latest.timestamp);
       const visibleHistory = sameDate ? history : [];
       const change = round(latest.price - latest.previousClose);
+      const status = marketStatus(this.deps.now());
+      const lastHistoryPoint = visibleHistory[visibleHistory.length - 1];
+      const age = freshness(status, this.deps.now(), latest.timestamp, lastHistoryPoint ? lastHistoryPoint.time * 1000 : undefined);
       captureAuction();
       const auctionHistory = [...currentAuction().values()].sort((a,b) => a.time-b.time);
       onUpdate({ history: visibleHistory, auction: auctionHistory,
         auctionMessage: isSector(normalized) ? "板块不提供集合竞价" : auctionHistory.length ? undefined : "等待真实竞价报价（需在09:15-09:25运行）",
         point: visibleHistory[visibleHistory.length-1] ?? { time: latest.timestamp/1000, price: latest.price, average: latest.price, volume: 0 },
         snapshot: { stock: { ...normalized, name: latest.name, previousClose: latest.previousClose }, price: latest.price, change,
-          changePercent: round((latest.price-latest.previousClose)/latest.previousClose*100), volume: latest.volume, timestamp: latest.timestamp, status: marketStatus(this.deps.now()), orderBook: latest.orderBook },
+          changePercent: round((latest.price-latest.previousClose)/latest.previousClose*100), volume: latest.volume, timestamp: latest.timestamp, status, orderBook: latest.orderBook },
         quoteSource: `${SOURCE_NAMES[quoteSource]}${latest.note ? `（${latest.note}）` : ""}`, quoteError,
         historySource: historySource ? SOURCE_NAMES[historySource] : undefined,
-        historyMessage: history.length && !sameDate ? "分时日期与报价不一致，等待更新" : historyMessage });
+        historyMessage: history.length && !sameDate ? "分时日期与报价不一致，等待更新" : historyMessage,
+        health: this.health.snapshot(), quoteAgeMs: age.quoteAgeMs, historyAgeMs: age.historyAgeMs,
+        sourceSwitched: sourceSwitched && this.deps.now() - sourceSwitched.at < 10_000 ? sourceSwitched : undefined });
     };
     const refreshQuote = async () => {
       try {
         const result = await this.quote(normalized);
         if (stopped) return;
+        if (quoteSource && quoteSource !== result.source) {
+          const previousHealth = this.health.get(`quote:${quoteSource}`);
+          sourceSwitched = { from: quoteSource as MarketSource, to: result.source as MarketSource, at: this.deps.now(), reason: previousHealth?.consecutiveFailures ? "failure" : "health" };
+        }
         latest = result.value; quoteSource = result.source; quoteError = undefined; quoteFailures = 0;
         publish();
       } catch (error) {
         if (stopped) return;
         quoteFailures++;
-        quoteError = `${isSector(normalized) ? "板块数据源待恢复，稍后自动重试：" : ""}${errorText(error)}`;
+        const target = isSector(normalized) ? `板块数据源待恢复（${isTonghuashun(normalized) ? "同花顺" : "东方财富"}）` : "报价待恢复";
+        quoteError = `${target}：${ERROR_LABELS[classifyMarketError(error)]}`;
         if (latest) publish();
         onError?.(quoteError);
       } finally {
@@ -171,7 +187,7 @@ export class EastmoneyMarketProvider implements MarketProvider {
         history = result.value; historySource = result.source; historyMessage = undefined;
       } catch (error) {
         if (stopped) return;
-        historyMessage = `分时待恢复：${errorText(error)}`;
+        historyMessage = `分时待恢复：${ERROR_LABELS[classifyMarketError(error)]}`;
       } finally {
         if (!stopped) {
           publish();
@@ -188,14 +204,14 @@ export class EastmoneyMarketProvider implements MarketProvider {
     if (isTonghuashun(stock)) {
       const id = tonghuashunId(stock);
       const [history, today] = await Promise.all([
-        this.choose(["v6", "v4"].map(version => ({ source: "ths" as const, key: `ths:daily:${version}`, run: async () =>
+        this.choose("daily", ["v6", "v4"].map(version => ({ source: "ths" as const, key: `daily:ths:${version}`, run: async () =>
           parseTonghuashunDaily(await this.read(`https://d.10jqka.com.cn/${version}/line/${id}/01/last.js`, 59_000), id, version) }))),
-        this.choose(["v6", "v4"].map(version => ({ source: "ths" as const, key: `ths:today:${version}`, run: async () =>
+        this.choose("daily", ["v6", "v4"].map(version => ({ source: "ths" as const, key: `daily:ths-today:${version}`, run: async () =>
           parseTonghuashunToday(await this.read(`https://d.10jqka.com.cn/${version}/line/${id}/01/today.js`, 59_000), id, version) }))),
       ]);
       return mergeTonghuashunDaily(history.value, [today.value]);
     }
-    const result = await this.choose(this.chartSources(stock).map(source => ({ source, key: `daily:${source}`, run: async () => {
+    const result = await this.choose("daily", this.chartSources(stock).map(source => ({ source, key: `daily:${source}`, run: async () => {
       if (source === "tencent") {
         const id = mainlandId(stock);
         return parseTencentDaily(await this.read(`https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=${id},day,,,90,qfq`, 59_000), id);
@@ -203,5 +219,29 @@ export class EastmoneyMarketProvider implements MarketProvider {
       return parseEastmoneyDaily(await this.read(`https://push2his.eastmoney.com/api/qt/stock/kline/get?secid=${eastmoneyId(stock)}&fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f52,f53,f54,f55,f56&klt=101&fqt=1&end=20500101&lmt=90`, 59_000));
     } })));
     return result.value;
+  }
+  async diagnoseCurrentStock(stock: Stock): Promise<DiagnosticResult[]> {
+    const normalized = normalizeInstrument(stock);
+    const sources: MarketSource[] = isTonghuashun(normalized) ? ["ths"] : isSector(normalized) ? ["eastmoney"] : ["tencent","sina","eastmoney"];
+    const results: DiagnosticResult[] = [];
+    for (const source of sources) {
+      const started = this.deps.now(), key = `quote:${source}`;
+      try {
+        if (source === "ths") {
+          const id = tonghuashunId(normalized);
+          await this.withTimeout(this.deps.request(`https://d.10jqka.com.cn/v6/realhead/${id}/last.js`).then(raw => parseTonghuashunQuote(raw,id)), 5000);
+        } else await this.withTimeout(this.quoteFromSource(normalized, source, 0, true), 5000);
+        const latencyMs = Math.max(0, this.deps.now() - started);
+        this.health.success(key, "quote", source, latencyMs);
+        const result = { source, ok: true, latencyMs } satisfies DiagnosticResult;
+        this.health.diagnostic(result); results.push(result);
+      } catch (error) {
+        const latencyMs = Math.max(0, this.deps.now() - started), errorCode = classifyMarketError(error);
+        this.health.failure(key, "quote", source, error, latencyMs);
+        const result = { source, ok: false, latencyMs, errorCode } satisfies DiagnosticResult;
+        this.health.diagnostic(result); results.push(result);
+      }
+    }
+    return results;
   }
 }

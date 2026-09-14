@@ -5,7 +5,8 @@ import { CandlestickSeries, ColorType, createChart, HistogramSeries, type Busine
 import { availableMonitors, currentMonitor, getCurrentWindow, LogicalSize, PhysicalPosition } from "@tauri-apps/api/window";
 import { register } from "@tauri-apps/plugin-global-shortcut";
 import { EastmoneyMarketProvider, normalizeInstrument, SECTOR_ALIASES } from "./market/eastmoneyProvider";
-import { chinaDate, isOpeningAuctionTime, type SourcePreference } from "./market/marketData";
+import { chinaDate, isOpeningAuctionTime, SOURCE_NAMES, type SourcePreference } from "./market/marketData";
+import { ERROR_LABELS } from "./market/marketHealth";
 import type { DailyCandle, QuoteUpdate, Stock } from "./market/types";
 import { DetailPanel } from "./detailPanel";
 
@@ -63,6 +64,7 @@ let dailyZoomAdjusted = false;
 let themeRaf = 0;
 let microAnchorPosition: { x: number; y: number } | null = null;
 let positionSaveTimer = 0;
+let sourceNoticeTimer = 0;
 const WINDOW_POSITION_KEY = "microWindowPositionV1";
 
 const icons = {
@@ -98,7 +100,7 @@ document.querySelector<HTMLDivElement>("#app")!.innerHTML = `
       <label class="source-setting">个股报价优先级<select id="quote-source"><option value="auto">自动（腾讯优先）</option><option value="tencent">腾讯优先</option><option value="sina">新浪优先</option><option value="eastmoney">东方财富优先</option></select></label>
       <section class="update-panel" aria-label="软件更新"><div class="update-version"></div><div class="update-status" role="status"></div><progress hidden></progress><label class="source-setting">更新网络<select class="update-network" aria-label="更新网络连接方式"><option value="auto">自动（直连优先）</option><option value="direct">直连</option><option value="system">系统代理</option></select></label><div class="update-route"></div><div class="update-actions"><button class="update-check" type="button">检查更新</button><button class="update-install" type="button" hidden>下载并安装</button></div><div class="update-hint">点击下载即同意校验后打开安装向导，软件将退出。覆盖安装保留持仓和设置。</div><pre class="update-notes" hidden></pre></section>
       <div class="data-source">v${APP_VERSION} · 报价5秒 / 分时30秒 · 休市降频<br>881129 使用同花顺原板块 · 无模拟回退</div>
-      <details class="market-diagnostics"><summary>行情详情（点击查看）</summary><div id="market-details">等待行情</div></details>
+      <details class="market-diagnostics"><summary>行情详情（点击查看）</summary><div id="market-details"><div class="market-summary">等待行情</div><div class="health-endpoints"></div><div class="diagnostic-actions"><button class="market-check" type="button">检测行情</button><span class="market-check-result"></span></div></div></details>
       <div class="attribution">Charts by <a href="https://www.tradingview.com/" target="_blank">TradingView</a></div>
     </aside>
     <div class="compact-row" data-drag-handle aria-label="滚轮换股 · 双击展开 · 右键设置 · 中键隐藏"><span class="stock-name" data-drag-handle>--</span><svg class="spark" viewBox="0 0 42 18"><path fill="none" stroke-width="1" d=""/></svg><span class="price flat" data-drag-handle>--</span><span class="change flat" data-drag-handle data-role="change-secondary">--%</span><div class="compact-actions"><button class="icon-button compact-button" aria-label="展开">${icons.shrink}</button></div></div>
@@ -184,6 +186,23 @@ function positionMetrics(update: QuoteUpdate) {
   return { quantity, cost, today, total, returnPercent, hasPosition: quantity > 0 && cost > 0 };
 }
 
+function renderMarketDetails(update: QuoteUpdate, marketDate: string, marketTime: string, returnPercent?: number) {
+  const details = document.querySelector<HTMLElement>("#market-details")!;
+  const summary = details.querySelector<HTMLElement>(".market-summary")!;
+  summary.textContent = `报价源：${update.quoteSource ?? "待连接"} · 行情时间 ${marketDate} ${marketTime} 北京时间 · 分时源：${update.historySource ?? "待连接"}${update.historyMessage ? ` · ${update.historyMessage}` : ""} · 竞价：${update.auction?.length ? `本次运行实时采集${update.auction.length}点` : update.auctionMessage ?? "待采集"}${update.quoteError ? ` · ${update.quoteError}` : ""}${returnPercent === undefined ? "" : ` · 收益率 ${returnPercent >= 0 ? "+" : ""}${returnPercent.toFixed(2)}%`}`;
+  const health = details.querySelector<HTMLElement>(".health-endpoints")!;
+  const kindName = { quote: "报价", minute: "分时", daily: "日K" } as const;
+  health.replaceChildren(...(update.health?.endpoints ?? []).map(endpoint => {
+    const row = document.createElement("div");
+    const latency = endpoint.latencyEwmaMs === undefined ? "—" : `${Math.round(endpoint.latencyEwmaMs)}ms`;
+    const cooldown = Math.max(0, Math.ceil((endpoint.cooldownUntil - (update.health?.generatedAt ?? Date.now())) / 1000));
+    const last = endpoint.lastSuccessAt ? new Date(endpoint.lastSuccessAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false }) : "—";
+    const state = cooldown ? `冷却${cooldown}秒` : endpoint.lastErrorCode ? ERROR_LABELS[endpoint.lastErrorCode] : "正常";
+    row.textContent = `${kindName[endpoint.kind]} ${SOURCE_NAMES[endpoint.source]} · ${latency} · ${state} · 最近成功 ${last} · 失败 ${endpoint.consecutiveFailures}`;
+    return row;
+  }));
+}
+
 function retainAuctionForToday(update: QuoteUpdate) {
   if (update.snapshot.stock.kind === "sector") return;
   const date = chinaDate(update.snapshot.timestamp);
@@ -211,7 +230,14 @@ function render(update: QuoteUpdate) {
   const metrics = positionMetrics(update);
   const marketTime = new Date(snapshot.timestamp).toLocaleTimeString("zh-CN", { timeZone: "Asia/Shanghai", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
   const marketDate = new Date(snapshot.timestamp + 8 * 3600_000).toISOString().slice(0, 10);
-  const oldTrade = snapshot.status === "trading" && Date.now() - snapshot.timestamp > 60_000;
+  const quoteAgeMs = update.quoteAgeMs ?? Math.max(0, Date.now() - snapshot.timestamp);
+  const oldTrade = snapshot.status === "trading" && quoteAgeMs > 15_000;
+  const quoteStale = (snapshot.status === "auction" && quoteAgeMs > 10_000) || oldTrade;
+  const historyStale = snapshot.status === "trading" && update.historyAgeMs !== undefined && update.historyAgeMs > 90_000;
+  window.clearTimeout(sourceNoticeTimer);
+  if (update.sourceSwitched) sourceNoticeTimer = window.setTimeout(() => {
+    if (latestUpdate === update) { update.sourceSwitched = undefined; render(update); }
+  }, Math.max(0, 10_000 - (Date.now() - update.sourceSwitched.at)));
   document.querySelectorAll<HTMLElement>(".stock-name").forEach(el => el.textContent = snapshot.stock.name);
   const marketLabel = snapshot.stock.kind === "sector" ? `${update.quoteSource ?? ""}板块` : snapshot.stock.symbol.startsWith("6") ? "SH" : "SZ";
   document.querySelector<HTMLElement>(".symbol")!.textContent = `${snapshot.stock.symbol} · ${marketLabel}`;
@@ -230,10 +256,13 @@ function render(update: QuoteUpdate) {
       : chartMode === "auction" ? `${update.auction?.length ? `实时竞价 · ${update.auction.length}点` : update.auctionMessage ?? "竞价待更新"} · ${marketTime}`
       : `${oldTrade ? "末笔" : statusLabels[snapshot.status]} · ${marketTime}`;
   if (update.quoteError) statusText.textContent = `报价待恢复 · 最后数据 ${marketTime}`;
+  else if (quoteStale) statusText.textContent = `行情延迟 ${Math.ceil(quoteAgeMs / 1000)}秒`;
+  else if (update.sourceSwitched) statusText.textContent = `${SOURCE_NAMES[update.sourceSwitched.from]}${update.sourceSwitched.reason === "failure" ? "异常，" : "较慢，"}已切至${SOURCE_NAMES[update.sourceSwitched.to]}`;
+  else if (chartMode === "intraday" && historyStale) statusText.textContent = `分时延迟 ${Math.ceil((update.historyAgeMs ?? 0) / 1000)}秒`;
   else if (chartMode === "intraday" && update.historyMessage) statusText.textContent += " · 分时待更新";
-  document.querySelector<HTMLElement>("#market-details")!.textContent = `报价源：${update.quoteSource ?? "东方财富"} · 行情时间 ${marketDate} ${marketTime} 北京时间 · 分时源：${update.historySource ?? "待连接"}${update.historyMessage ? ` · ${update.historyMessage}` : ""} · 竞价：${update.auction?.length ? `本次运行实时采集${update.auction.length}点` : update.auctionMessage ?? "待采集"}${update.quoteError ? ` · ${update.quoteError}` : ""}${metrics.hasPosition ? ` · 收益率 ${metrics.returnPercent >= 0 ? "+" : ""}${metrics.returnPercent.toFixed(2)}%` : ""}`;
+  renderMarketDetails(update, marketDate, marketTime, metrics.hasPosition ? metrics.returnPercent : undefined);
   document.querySelector(".status-dot")!.classList.toggle("live", ((chartMode === "intraday" && snapshot.status === "trading") || (chartMode === "auction" && snapshot.status === "auction")) && !update.quoteError);
-  document.querySelector(".status-dot")!.classList.toggle("stale", oldTrade || Boolean(update.quoteError));
+  document.querySelector(".status-dot")!.classList.toggle("stale", quoteStale || historyStale || Boolean(update.quoteError));
   renderSparkline(history.slice(-36).map(point => point.price), changeClass);
   void renderChart();
   detailPanel.renderBook(); detailPanel.drawSector();
@@ -441,7 +470,8 @@ function selectStock(index: number) {
   candleSeries.setData([]);
   dailyVolumeSeries.setData([]);
   document.querySelector<HTMLElement>(".status-text")!.textContent = "连接真实行情…";
-  document.querySelector<HTMLElement>("#market-details")!.textContent = "正在连接行情";
+  document.querySelector<HTMLElement>(".market-summary")!.textContent = "正在连接行情";
+  document.querySelector<HTMLElement>(".health-endpoints")!.replaceChildren();
   disconnect = provider.connect(stocks[selectedIndex], update => {
     stocks[selectedIndex] = update.snapshot.stock;
     saveStocks();
@@ -449,7 +479,7 @@ function selectStock(index: number) {
   }, message => {
     const status = document.querySelector<HTMLElement>(".status-text")!;
     status.textContent = latestUpdate ? "报价待恢复 · 保留末笔" : "报价待恢复";
-    document.querySelector<HTMLElement>("#market-details")!.textContent = message;
+    document.querySelector<HTMLElement>(".market-summary")!.textContent = message;
     document.querySelector(".status-dot")!.classList.remove("live");
     document.querySelector(".status-dot")!.classList.add("stale");
   });
@@ -577,6 +607,17 @@ function wireEvents() {
     localStorage.setItem("quoteSourcePreference", sourceSelect.value);
     provider.setPreference(sourceSelect.value as SourcePreference);
     selectStock(currentIndex);
+  });
+  const marketCheck = document.querySelector<HTMLButtonElement>(".market-check")!;
+  marketCheck.addEventListener("click", async () => {
+    const result = document.querySelector<HTMLElement>(".market-check-result")!;
+    marketCheck.disabled = true; result.textContent = "检测中…";
+    try {
+      const rows = await provider.diagnoseCurrentStock(stocks[currentIndex]);
+      result.textContent = rows.map(row => `${SOURCE_NAMES[row.source]}：${row.ok ? `${Math.round(row.latencyMs)}ms` : ERROR_LABELS[row.errorCode ?? "invalid_response"]}`).join(" · ");
+      if (latestUpdate) { latestUpdate.health = provider.getHealthSnapshot(); render(latestUpdate); }
+    } catch { result.textContent = "检测未完成"; }
+    finally { marketCheck.disabled = false; }
   });
   document.querySelectorAll<HTMLButtonElement>(".compact-button").forEach(button => button.addEventListener("click", () => void setCompact(!compact)));
   document.querySelector<HTMLButtonElement>(".detail-button")!.addEventListener("click", () => void toggleDetailed());
@@ -728,4 +769,9 @@ const disposeUpdater = mountUpdatePanel(shell, APP_VERSION, isTauri, async () =>
   document.querySelector(".update-panel")!.scrollIntoView({ block: "start" });
   if (isTauri) await appWindow.setFocus();
 });
-window.addEventListener("beforeunload", () => { disconnect?.(); detailPanel.dispose(); disposeUpdater(); });
+window.addEventListener("beforeunload", () => {
+  window.clearTimeout(sourceNoticeTimer);
+  disconnect?.();
+  detailPanel.dispose();
+  disposeUpdater();
+});

@@ -1,4 +1,22 @@
 export type MarketStatus = "preopen" | "auction" | "trading" | "break" | "closed";
+export type MarketSource = "tencent" | "sina" | "eastmoney" | "ths";
+export type MarketRequestKind = "quote" | "minute" | "daily";
+export type MarketErrorCode = "timeout" | "connection" | "rate_limit" | "invalid_response" | "stale";
+
+export interface SourceHealth {
+  key: string;
+  kind: MarketRequestKind;
+  source: MarketSource;
+  lastSuccessAt?: number;
+  consecutiveFailures: number;
+  latencyEwmaMs?: number;
+  cooldownUntil: number;
+  lastErrorCode?: MarketErrorCode;
+}
+
+export interface MarketHealthSnapshot { generatedAt: number; endpoints: SourceHealth[] }
+export interface SourceSwitch { from: MarketSource; to: MarketSource; at: number; reason: "failure" | "health" }
+export interface DiagnosticResult { source: MarketSource; ok: boolean; latencyMs: number; errorCode?: MarketErrorCode }
 
 export interface Stock {
   symbol: string;
@@ -63,9 +81,15 @@ export interface QuoteUpdate {
   history: IntradayPoint[];
   auction?: AuctionPoint[];
   auctionMessage?: string;
+  health?: MarketHealthSnapshot;
+  quoteAgeMs?: number;
+  historyAgeMs?: number;
+  sourceSwitched?: SourceSwitch;
 }
 
 export interface MarketProvider {
   connect(stock: Stock, onUpdate: (update: QuoteUpdate) => void, onError?: (message: string) => void): () => void;
   getDailyCandles(stock: Stock): Promise<DailyCandle[]>;
+  getHealthSnapshot(): MarketHealthSnapshot;
+  diagnoseCurrentStock(stock: Stock): Promise<DiagnosticResult[]>;
 }

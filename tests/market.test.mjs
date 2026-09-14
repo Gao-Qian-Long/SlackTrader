@@ -5,10 +5,10 @@ import ts from 'typescript';
 
 const out = new URL('../artifacts/market-fix/test-built/', import.meta.url);
 await mkdir(out, { recursive: true });
-for (const file of ['marketData', 'tonghuashun', 'eastmoneyProvider']) {
+for (const file of ['marketData', 'tonghuashun', 'marketHealth', 'eastmoneyProvider']) {
   const input = await readFile(new URL(`../src/market/${file}.ts`, import.meta.url), 'utf8');
   const js = ts.transpileModule(input, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext } }).outputText
-    .replaceAll('"./marketData"', '"./marketData.mjs"').replaceAll('"./tonghuashun"', '"./tonghuashun.mjs"');
+    .replaceAll('"./marketData"', '"./marketData.mjs"').replaceAll('"./tonghuashun"', '"./tonghuashun.mjs"').replaceAll('"./marketHealth"', '"./marketHealth.mjs"');
   await writeFile(new URL(`${file}.mjs`, out), js);
 }
 const data = await import(new URL('marketData.mjs', out));
